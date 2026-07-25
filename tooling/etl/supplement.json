@@ -1,0 +1,21 @@
+{
+  "comment": "Real courses missing from OSM, added manually with verified coordinates. Merged during transform with source='manual'. Dedupe handles the day OSM catches up.",
+  "courses": [
+    {
+      "name": "Pacific Dunes",
+      "state": "OR",
+      "city": "Bandon",
+      "lat": 43.1936,
+      "lng": -124.3974,
+      "attrs": { "holes": 18, "access": "resort", "website": "https://www.bandondunesgolf.com/golf/pacific-dunes/" }
+    },
+    {
+      "name": "Kapalua Plantation Course",
+      "state": "HI",
+      "city": "Lahaina",
+      "lat": 21.0037,
+      "lng": -156.6528,
+      "attrs": { "holes": 18, "access": "resort", "website": "https://www.golfatkapalua.com" }
+    }
+  ]
+}
