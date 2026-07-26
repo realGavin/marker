@@ -2,11 +2,15 @@ import { extractAll } from "./extract.js";
 import { transform } from "./transform.js";
 import { report } from "./report.js";
 import { load } from "./load.js";
+import { pins } from "./pins.js";
 
 const cmd = process.argv[2];
 switch (cmd) {
   case "extract":
     await extractAll(process.argv.includes("--force"));
+    break;
+  case "pins":
+    await pins();
     break;
   case "transform":
     await transform();

@@ -4,8 +4,10 @@
   "version": "1.0.0",
   "dependencies": {
     "@expo/vector-icons": "^15.0.0",
+    "@maplibre/maplibre-react-native": "^11.3.6",
     "@marker/core": "workspace:*",
     "@marker/skin-golf": "workspace:*",
+    "@protomaps/basemaps": "^5.7.2",
     "@react-native-async-storage/async-storage": "~2.2.0",
     "@supabase/supabase-js": "^2.49.0",
     "expo": "~57.0.8",
@@ -14,6 +16,7 @@
     "expo-font": "~57.0.1",
     "expo-image": "~57.0.1",
     "expo-linking": "~57.0.4",
+    "expo-location": "^57.0.6",
     "expo-router": "~57.0.8",
     "expo-splash-screen": "~57.0.5",
     "expo-status-bar": "~57.0.1",

@@ -20,6 +20,13 @@
     "plugins": [
       "expo-router",
       "expo-apple-authentication",
+      "@maplibre/maplibre-react-native",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Marker uses your location to show places near you."
+        }
+      ],
       [
         "expo-splash-screen",
         {

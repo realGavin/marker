@@ -6,6 +6,10 @@
 export const env = {
   supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL ?? "",
   supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "",
+  /** z/x/y vector-tile endpoint. Dev default: local pmtiles server. */
+  tileUrl:
+    process.env.EXPO_PUBLIC_TILE_URL ??
+    "http://127.0.0.1:8082/basemap-us/{z}/{x}/{y}.mvt",
 };
 
 export const isBackendConfigured =
