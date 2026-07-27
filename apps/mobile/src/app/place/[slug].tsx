@@ -1,50 +1,47 @@
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { Stack, useLocalSearchParams } from "expo-router";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
-import { getSupabase } from "../../lib/supabase";
+import { usePlace, useMyLogs, useUpsertLog, useDeleteLog } from "../../lib/data";
 
-interface PlaceDetail {
-  slug: string;
-  name: string;
-  city: string | null;
-  region: string | null;
-  attrs: unknown;
-  description: string | null;
-}
+/** Rating stored as 0–20 (half steps); shown as 0–10. */
+const shownRating = (r: number) => (r / 2).toFixed(r % 2 ? 1 : 0);
 
 export default function PlaceScreen() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
-  const [place, setPlace] = useState<PlaceDetail | null>(null);
-  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const { data: place, isPending, isError } = usePlace(slug ?? "");
+  const { data: logs } = useMyLogs();
+  const upsert = useUpsertLog();
+  const remove = useDeleteLog();
+
+  const myLog = logs?.find((l) => l.place.slug === slug);
+  const [note, setNote] = useState("");
+  const [rating, setRating] = useState<number | null>(null);
 
   useEffect(() => {
-    const supabase = getSupabase();
-    if (!supabase || !slug) return setState("error");
-    supabase
-      .from("places")
-      .select("slug,name,city,region,attrs,description")
-      .eq("niche_id", skin.nicheId)
-      .eq("slug", slug)
-      .single()
-      .then(({ data, error }) => {
-        if (error || !data) setState("error");
-        else {
-          setPlace(data as PlaceDetail);
-          setState("ready");
-        }
-      });
-  }, [slug]);
+    setNote(myLog?.note ?? "");
+    setRating(myLog?.rating ?? null);
+  }, [myLog?.note, myLog?.rating]);
 
-  if (state === "loading") {
+  if (isPending) {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={colors.primary} />
       </View>
     );
   }
-  if (state === "error" || !place) {
+  if (isError || !place) {
     return (
       <View style={styles.center}>
         <Text style={type.body}>Couldn't load this {skin.vocab.place}.</Text>
@@ -56,13 +53,75 @@ export default function PlaceScreen() {
   const facts = skin.attributeFacts(place.attrs);
   const website = (place.attrs as { website?: string } | null)?.website;
   const location = [place.city, place.region].filter(Boolean).join(", ");
+  const status = myLog?.status;
+
+  const setStatus = (next: "visited" | "want") => {
+    if (status === next) {
+      remove.mutate(place.id);
+    } else {
+      upsert.mutate({ placeId: place.id, status: next, rating, note: note || null });
+    }
+  };
+
+  const saveDetails = (r: number | null) => {
+    setRating(r);
+    if (status === "visited") {
+      upsert.mutate({ placeId: place.id, status: "visited", rating: r, note: note || null });
+    }
+  };
 
   return (
     <>
-      <Stack.Screen options={{ title: place.name, headerBackTitle: "Map" }} />
-      <ScrollView style={styles.container} contentContainerStyle={{ padding: spacing.md }}>
+      <Stack.Screen options={{ title: place.name, headerBackTitle: "Back" }} />
+      <ScrollView style={styles.container} contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl * 2 }}>
         <Text style={type.title}>{place.name}</Text>
         {location ? <Text style={[type.caption, { marginTop: spacing.xs }]}>{location}</Text> : null}
+
+        <View style={styles.statusRow}>
+          <Pressable
+            style={[styles.statusButton, status === "visited" && styles.statusActive]}
+            onPress={() => setStatus("visited")}
+            disabled={upsert.isPending || remove.isPending}
+          >
+            <Ionicons name={status === "visited" ? "checkmark-circle" : "checkmark-circle-outline"} size={20} color={status === "visited" ? "#FFF" : colors.primary} />
+            <Text style={[styles.statusText, status === "visited" && { color: "#FFF" }]}>{skin.vocab.visited}</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.statusButton, status === "want" && styles.statusActiveWant]}
+            onPress={() => setStatus("want")}
+            disabled={upsert.isPending || remove.isPending}
+          >
+            <Ionicons name={status === "want" ? "bookmark" : "bookmark-outline"} size={18} color={status === "want" ? "#FFF" : colors.accent} />
+            <Text style={[styles.statusText, { color: status === "want" ? "#FFF" : colors.accent }]}>{skin.vocab.wantTo}</Text>
+          </Pressable>
+        </View>
+
+        {status === "visited" && (
+          <View style={styles.card}>
+            <Text style={type.heading}>Your rating</Text>
+            <View style={styles.ratingRow}>
+              {[2, 4, 6, 8, 10, 12, 14, 16, 18, 20].map((r) => (
+                <Pressable key={r} onPress={() => saveDetails(rating === r ? null : r)} hitSlop={4}>
+                  <Ionicons
+                    name={rating != null && rating >= r ? "star" : "star-outline"}
+                    size={26}
+                    color={colors.accent}
+                  />
+                </Pressable>
+              ))}
+            </View>
+            {rating != null && <Text style={type.caption}>{shownRating(rating)} / 10</Text>}
+            <TextInput
+              style={styles.noteInput}
+              placeholder="Add a note…"
+              placeholderTextColor={colors.textSecondary}
+              value={note}
+              onChangeText={setNote}
+              onEndEditing={() => upsert.mutate({ placeId: place.id, status: "visited", rating, note: note || null })}
+              multiline
+            />
+          </View>
+        )}
 
         {facts.length > 0 && (
           <View style={styles.card}>
@@ -76,9 +135,7 @@ export default function PlaceScreen() {
         )}
 
         <View style={styles.card}>
-          <Text style={type.body}>
-            {place.description ?? "Description coming soon."}
-          </Text>
+          <Text style={type.body}>{place.description ?? "Description coming soon."}</Text>
         </View>
 
         {website ? (
@@ -94,12 +151,34 @@ export default function PlaceScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background, padding: spacing.lg },
-  card: {
+  statusRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md },
+  statusButton: {
+    flex: 1,
+    flexDirection: "row",
+    gap: spacing.xs,
+    height: 44,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: colors.primary,
     backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: spacing.md,
-    marginTop: spacing.md,
   },
+  statusActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  statusActiveWant: { backgroundColor: colors.accent, borderColor: colors.accent },
+  statusText: { fontSize: 15, fontWeight: "600", color: colors.primary },
+  ratingRow: { flexDirection: "row", gap: 4, marginVertical: spacing.sm },
+  noteInput: {
+    marginTop: spacing.sm,
+    minHeight: 60,
+    borderWidth: 1,
+    borderColor: "#DDD8CC",
+    borderRadius: 8,
+    padding: spacing.sm,
+    color: colors.textPrimary,
+    backgroundColor: colors.background,
+  },
+  card: { backgroundColor: colors.surface, borderRadius: 12, padding: spacing.md, marginTop: spacing.md },
   factRow: { flexDirection: "row", alignItems: "center", paddingVertical: spacing.xs },
   button: {
     marginTop: spacing.md,

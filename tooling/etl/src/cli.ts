@@ -3,6 +3,7 @@ import { transform } from "./transform.js";
 import { report } from "./report.js";
 import { load } from "./load.js";
 import { pins } from "./pins.js";
+import { seedLists } from "./seed-lists.js";
 
 const cmd = process.argv[2];
 switch (cmd) {
@@ -11,6 +12,9 @@ switch (cmd) {
     break;
   case "pins":
     await pins();
+    break;
+  case "seed-lists":
+    await seedLists();
     break;
   case "transform":
     await transform();

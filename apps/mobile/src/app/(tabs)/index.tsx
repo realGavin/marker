@@ -15,6 +15,7 @@ import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
 import { buildMapStyle } from "../../lib/map-style";
 import { pinsGeoJSON, searchPins, type Pin } from "../../lib/pins";
+import { useMyLogs } from "../../lib/data";
 
 const US_CENTER: [number, number] = [-98.5, 39.8];
 
@@ -26,6 +27,20 @@ export default function MapScreen() {
   const [locBusy, setLocBusy] = useState(false);
   const mapStyle = useMemo(buildMapStyle, []);
   const results = useMemo(() => searchPins(query), [query]);
+  const { data: logs } = useMyLogs();
+
+  // color pins by the user's log status
+  const pinColor = useMemo(() => {
+    const visited = (logs ?? []).filter((l) => l.status === "visited").map((l) => l.place.slug);
+    const want = (logs ?? []).filter((l) => l.status === "want").map((l) => l.place.slug);
+    if (!visited.length && !want.length) return colors.defaultPin as unknown;
+    return [
+      "case",
+      ["in", ["get", "slug"], ["literal", visited]], colors.visitedPin,
+      ["in", ["get", "slug"], ["literal", want]], colors.wantPin,
+      colors.defaultPin,
+    ] as unknown;
+  }, [logs]);
 
   const flyTo = (lng: number, lat: number, zoom = 13) =>
     camera.current?.flyTo({ center: [lng, lat], zoom, duration: 800 });
@@ -100,7 +115,8 @@ export default function MapScreen() {
             id="pin"
             filter={["!", ["has", "point_count"]]}
             paint={{
-              "circle-color": colors.defaultPin,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              "circle-color": pinColor as any,
               "circle-radius": 6,
               "circle-stroke-width": 2,
               "circle-stroke-color": "#FFFFFF",
