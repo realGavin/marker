@@ -3,6 +3,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { AuthProvider, useAuth } from "../providers/auth";
 import { PurchasesProvider } from "../providers/purchases";
+import { useProfile } from "../lib/data";
 import { QueryProvider } from "../providers/query";
 import { isBackendConfigured } from "../lib/env";
 import { colors } from "../ui/theme";
@@ -10,8 +11,10 @@ import { ActivityIndicator, View } from "react-native";
 
 function Gate() {
   const { session, loading } = useAuth();
+  const signedIn = isBackendConfigured && !!session;
+  const { data: profile, isPending: profilePending } = useProfile();
 
-  if (loading) {
+  if (loading || (signedIn && profilePending)) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
         <ActivityIndicator color={colors.primary} />
@@ -19,11 +22,14 @@ function Gate() {
     );
   }
 
-  const signedIn = isBackendConfigured && !!session;
+  const needsOnboarding = signedIn && profile != null && profile.handle == null;
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
-      <Stack.Protected guard={signedIn}>
+      <Stack.Protected guard={signedIn && needsOnboarding}>
+        <Stack.Screen name="onboarding" />
+      </Stack.Protected>
+      <Stack.Protected guard={signedIn && !needsOnboarding}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen
           name="place/[slug]"

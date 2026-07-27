@@ -12,8 +12,15 @@ export default function LogScreen() {
   const router = useRouter();
   const { data: logs, isPending } = useMyLogs();
   const [tab, setTab] = useState<"visited" | "want">("visited");
+  const [sort, setSort] = useState<"recent" | "name" | "rating">("recent");
 
-  const rows = (logs ?? []).filter((l) => l.status === tab);
+  const rows = (logs ?? [])
+    .filter((l) => l.status === tab)
+    .sort((a, b) => {
+      if (sort === "name") return a.place.name.localeCompare(b.place.name);
+      if (sort === "rating") return (b.rating ?? -1) - (a.rating ?? -1);
+      return 0; // server order is already most-recent-first
+    });
 
   return (
     <View style={styles.container}>
@@ -32,8 +39,18 @@ export default function LogScreen() {
         ))}
       </View>
 
+      <View style={styles.sortRow}>
+        {(["recent", "name", "rating"] as const).map((s) => (
+          <Pressable key={s} onPress={() => setSort(s)}>
+            <Text style={[styles.sortText, sort === s && { color: colors.primary, fontWeight: "700" }]}>
+              {s === "recent" ? "Recent" : s === "name" ? "A-Z" : "Top rated"}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
       <FlatList
-        contentContainerStyle={{ padding: spacing.md }}
+        contentContainerStyle={{ padding: spacing.md, paddingTop: 0 }}
         data={rows}
         keyExtractor={(l) => l.place_id}
         renderItem={({ item }) => (
@@ -81,6 +98,8 @@ const styles = StyleSheet.create({
   segmentButton: { flex: 1, height: 38, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   segmentActive: { backgroundColor: colors.primary },
   segmentText: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
+  sortRow: { flexDirection: "row", gap: spacing.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  sortText: { fontSize: 13, color: colors.textSecondary },
   row: {
     flexDirection: "row",
     alignItems: "center",

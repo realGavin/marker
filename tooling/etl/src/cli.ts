@@ -22,6 +22,9 @@ switch (cmd) {
   case "describe":
     await (await import("./describe.js")).describe();
     break;
+  case "icon":
+    await (await import("./icon.js")).icon();
+    break;
   case "scrub":
     await (await import("./scrub.js")).scrub();
     break;

@@ -57,6 +57,7 @@ export interface Profile {
   id: string;
   handle: string | null;
   display_name: string | null;
+  home_region: string | null;
 }
 
 export function useProfile() {
@@ -67,11 +68,24 @@ export function useProfile() {
     queryFn: async (): Promise<Profile | null> => {
       const { data, error } = await sb()
         .from("profiles")
-        .select("id,handle,display_name")
+        .select("id,handle,display_name,home_region")
         .maybeSingle();
       if (error) throw error;
       return data;
     },
+  });
+}
+
+export function useUpdateProfile() {
+  const qc = useQueryClient();
+  const { session } = useAuth();
+  return useMutation({
+    mutationFn: async (patch: Partial<Pick<Profile, "handle" | "display_name" | "home_region">>) => {
+      if (!session) throw new Error("not signed in");
+      const { error } = await sb().from("profiles").update(patch).eq("id", session.user.id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["profile"] }),
   });
 }
 
@@ -278,6 +292,35 @@ export function useCreateList() {
       if (error) throw error;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["lists"] }),
+  });
+}
+
+export function useDeleteList() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (listId: string) => {
+      const { error } = await sb().from("lists").delete().eq("id", listId);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["lists"] }),
+  });
+}
+
+export function useRemoveFromList() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { listId: string; placeId: string }) => {
+      const { error } = await sb()
+        .from("list_items")
+        .delete()
+        .eq("list_id", input.listId)
+        .eq("place_id", input.placeId);
+      if (error) throw error;
+    },
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ["list-items", v.listId] });
+      qc.invalidateQueries({ queryKey: ["lists"] });
+    },
   });
 }
 

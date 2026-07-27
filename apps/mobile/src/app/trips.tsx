@@ -22,6 +22,22 @@ import {
 
 const BUDGETS = ["any", "$", "$$", "$$$"] as const;
 
+const LOADING_LINES = [
+  "Reading the map…",
+  "Pacing out your days…",
+  "Weighing the drive times…",
+  "Putting the route in order…",
+];
+
+function LoadingLine() {
+  const [i, setI] = useState(0);
+  React.useEffect(() => {
+    const t = setInterval(() => setI((n) => (n + 1) % LOADING_LINES.length), 2500);
+    return () => clearInterval(t);
+  }, []);
+  return <Text style={{ color: "#FFF", fontSize: 15, fontWeight: "600" }}>{LOADING_LINES[i]}</Text>;
+}
+
 export default function TripsScreen() {
   const router = useRouter();
   const { data: savedPlans } = useTripPlans();
@@ -130,7 +146,10 @@ export default function TripsScreen() {
             disabled={planTrip.isPending || !region.trim()}
           >
             {planTrip.isPending ? (
-              <ActivityIndicator color="#FFF" />
+              <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
+                <ActivityIndicator color="#FFF" />
+                <LoadingLine />
+              </View>
             ) : (
               <Text style={styles.generateText}>Build my trip</Text>
             )}

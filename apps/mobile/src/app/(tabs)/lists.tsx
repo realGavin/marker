@@ -3,7 +3,7 @@ import { Alert, FlatList, Pressable, StyleSheet, Text, View } from "react-native
 import { useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors, spacing, type } from "../../ui/theme";
-import { useCreateList, useListItems, useLists, useMyLogs } from "../../lib/data";
+import { useCreateList, useDeleteList, useListItems, useLists, useMyLogs } from "../../lib/data";
 import { usePurchases } from "../../providers/purchases";
 
 const FREE_LIST_LIMIT = 3;
@@ -13,6 +13,7 @@ export default function ListsScreen() {
   const { data: lists, isPending } = useLists();
   const { data: logs } = useMyLogs();
   const createList = useCreateList();
+  const deleteList = useDeleteList();
   const [creating, setCreating] = useState(false);
 
   const visitedIds = new Set((logs ?? []).filter((l) => l.status === "visited").map((l) => l.place_id));
@@ -60,6 +61,15 @@ export default function ListsScreen() {
           itemCount={item.itemCount}
           visitedIds={visitedIds}
           onPress={() => router.push(`/list/${item.id}`)}
+          onLongPress={
+            item.owner_id === null
+              ? undefined
+              : () =>
+                  Alert.alert("Delete list?", `"${item.title}" and its contents will be removed.`, [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Delete", style: "destructive", onPress: () => deleteList.mutate(item.id) },
+                  ])
+          }
         />
       )}
       ListEmptyComponent={
@@ -79,6 +89,7 @@ function ListCard(props: {
   itemCount: number;
   visitedIds: Set<string>;
   onPress: () => void;
+  onLongPress?: () => void;
 }) {
   const { data: items } = useListItems(props.id);
   const done = (items ?? []).filter((i) => props.visitedIds.has(i.place.id)).length;
@@ -86,7 +97,7 @@ function ListCard(props: {
   const pct = total > 0 ? Math.min(1, done / total) : 0;
 
   return (
-    <Pressable style={styles.card} onPress={props.onPress}>
+    <Pressable style={styles.card} onPress={props.onPress} onLongPress={props.onLongPress}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
         {props.curated && <Ionicons name="ribbon" size={16} color={colors.accent} />}
         <Text style={type.heading} numberOfLines={1}>{props.title}</Text>

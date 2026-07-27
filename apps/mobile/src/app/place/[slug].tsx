@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Pressable,
   ScrollView,
@@ -13,7 +14,17 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
-import { usePlace, useMyLogs, useUpsertLog, useDeleteLog, useSimilarPlaces } from "../../lib/data";
+import * as Haptics from "expo-haptics";
+import {
+  usePlace,
+  useMyLogs,
+  useUpsertLog,
+  useDeleteLog,
+  useSimilarPlaces,
+  useLists,
+  useAddToList,
+  useCreateList,
+} from "../../lib/data";
 import { useRouter } from "expo-router";
 
 /** Rating stored as 0–20 (half steps); shown as 0–10. */
@@ -27,6 +38,11 @@ export default function PlaceScreen() {
   const { data: logs } = useMyLogs();
   const upsert = useUpsertLog();
   const remove = useDeleteLog();
+  const { data: allLists } = useLists();
+  const addToList = useAddToList();
+  const createList = useCreateList();
+  const [listPickerOpen, setListPickerOpen] = useState(false);
+  const myLists = (allLists ?? []).filter((l) => l.owner_id !== null);
 
   const myLog = logs?.find((l) => l.place.slug === slug);
   const [note, setNote] = useState("");
@@ -62,6 +78,7 @@ export default function PlaceScreen() {
     if (status === next) {
       remove.mutate(place.id);
     } else {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       upsert.mutate({ placeId: place.id, status: next, rating, note: note || null });
     }
   };
@@ -98,6 +115,43 @@ export default function PlaceScreen() {
             <Text style={[styles.statusText, { color: status === "want" ? "#FFF" : colors.accent }]}>{skin.vocab.wantTo}</Text>
           </Pressable>
         </View>
+
+        <Pressable style={styles.addToList} onPress={() => setListPickerOpen(!listPickerOpen)}>
+          <Ionicons name="albums-outline" size={18} color={colors.primary} />
+          <Text style={styles.addToListText}>Add to a list</Text>
+          <Ionicons name={listPickerOpen ? "chevron-up" : "chevron-down"} size={15} color={colors.textSecondary} />
+        </Pressable>
+        {listPickerOpen && (
+          <View style={styles.card}>
+            {myLists.map((l) => (
+              <Pressable
+                key={l.id}
+                style={styles.listRow}
+                onPress={() => {
+                  addToList.mutate({ listId: l.id, placeId: place.id });
+                  setListPickerOpen(false);
+                  Haptics.selectionAsync().catch(() => {});
+                }}
+              >
+                <Ionicons name="list" size={16} color={colors.primary} />
+                <Text style={type.body}>{l.title}</Text>
+              </Pressable>
+            ))}
+            <Pressable
+              style={styles.listRow}
+              onPress={() => {
+                Alert.prompt("New list", "Name your list", (title) => {
+                  if (title?.trim()) {
+                    createList.mutate(title.trim());
+                  }
+                });
+              }}
+            >
+              <Ionicons name="add" size={16} color={colors.accent} />
+              <Text style={[type.body, { color: colors.accent }]}>New list…</Text>
+            </Pressable>
+          </View>
+        )}
 
         {status === "visited" && (
           <View style={styles.card}>
@@ -203,6 +257,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   card: { backgroundColor: colors.surface, borderRadius: 12, padding: spacing.md, marginTop: spacing.md },
+  addToList: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    alignSelf: "flex-start",
+    paddingVertical: spacing.xs,
+  },
+  addToListText: { fontSize: 14, fontWeight: "600", color: colors.primary },
+  listRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
   similarRow: {
     flexDirection: "row",
     alignItems: "center",

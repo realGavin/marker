@@ -91,9 +91,16 @@ export default function PaywallScreen() {
                 onPress={() => buy(pkg)}
                 disabled={busy}
               >
-                <Text style={[styles.planTitle, pkg.packageType === "ANNUAL" && { color: "#FFF" }]}>
-                  {pkg.packageType === "ANNUAL" ? "Annual" : pkg.packageType === "MONTHLY" ? "Monthly" : pkg.product.title}
-                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Text style={[styles.planTitle, pkg.packageType === "ANNUAL" && { color: "#FFF" }]}>
+                    {pkg.packageType === "ANNUAL" ? "Annual" : pkg.packageType === "MONTHLY" ? "Monthly" : pkg.product.title}
+                  </Text>
+                  {pkg.packageType === "ANNUAL" && (
+                    <View style={styles.saveBadge}>
+                      <Text style={styles.saveBadgeText}>SAVE 44%</Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={[styles.planPrice, pkg.packageType === "ANNUAL" && { color: "#FFF" }]}>
                   {pkg.product.priceString}
                   {pkg.packageType === "ANNUAL" ? " / year" : pkg.packageType === "MONTHLY" ? " / month" : ""}
@@ -127,5 +134,7 @@ const styles = StyleSheet.create({
   },
   planPrimary: { backgroundColor: colors.primary },
   planTitle: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
+  saveBadge: { backgroundColor: colors.accent, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  saveBadgeText: { fontSize: 10, fontWeight: "800", color: "#1A1A18", letterSpacing: 0.5 },
   planPrice: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
 });

@@ -1,5 +1,6 @@
 import React, { useRef, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { getSupabase } from "../../lib/supabase";
 import { captureRef } from "react-native-view-shot";
 import * as Sharing from "expo-sharing";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -41,7 +42,9 @@ export default function ProfileScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl * 2 }}>
-      <Text style={type.heading}>{profile?.display_name ?? session?.user.email}</Text>
+      <Text style={type.heading}>
+        {profile?.display_name ?? (profile?.handle ? `@${profile.handle}` : session?.user.email)}
+      </Text>
       <Text style={[type.caption, { marginBottom: spacing.md }]}>
         Your {skin.vocab.place} map, ready to share.
       </Text>
@@ -77,8 +80,41 @@ export default function ProfileScreen() {
         )}
       </View>
 
-      <Pressable style={styles.signOut} onPress={signOut}>
+      <Pressable
+        style={styles.signOut}
+        onPress={() =>
+          Alert.alert("Sign out?", undefined, [
+            { text: "Cancel", style: "cancel" },
+            { text: "Sign out", style: "destructive", onPress: signOut },
+          ])
+        }
+      >
         <Text style={[type.caption, { color: colors.textSecondary }]}>Sign out</Text>
+      </Pressable>
+
+      <Pressable
+        style={{ alignItems: "center", marginTop: spacing.md }}
+        onPress={() =>
+          Alert.alert(
+            "Delete account?",
+            "This permanently deletes your account, logs, lists, and trips. It cannot be undone.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Delete forever",
+                style: "destructive",
+                onPress: async () => {
+                  const supabase = getSupabase();
+                  const { error } = (await supabase?.functions.invoke("delete-account")) ?? {};
+                  if (error) Alert.alert("Couldn't delete", "Please try again or contact support.");
+                  else signOut();
+                },
+              },
+            ],
+          )
+        }
+      >
+        <Text style={[type.caption, { color: "#B4552D" }]}>Delete account</Text>
       </Pressable>
     </ScrollView>
   );
