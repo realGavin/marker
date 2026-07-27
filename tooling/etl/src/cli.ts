@@ -16,6 +16,12 @@ switch (cmd) {
   case "seed-lists":
     await seedLists();
     break;
+  case "embed":
+    await (await import("./embed.js")).embed();
+    break;
+  case "describe":
+    await (await import("./describe.js")).describe();
+    break;
   case "transform":
     await transform();
     break;

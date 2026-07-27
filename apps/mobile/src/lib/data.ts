@@ -149,6 +149,29 @@ export function useListItems(listId: string) {
   });
 }
 
+export interface SimilarPlace {
+  id: string;
+  slug: string;
+  name: string;
+  city: string | null;
+  region: string | null;
+  similarity: number;
+}
+
+/** Nearest-neighbour places via pgvector RPC; empty until embeddings are loaded. */
+export function useSimilarPlaces(placeId: string | undefined) {
+  return useQuery({
+    queryKey: ["similar", placeId],
+    enabled: !!placeId,
+    staleTime: 24 * 3600_000, // embeddings are static between batch runs
+    queryFn: async (): Promise<SimilarPlace[]> => {
+      const { data, error } = await sb().rpc("match_places", { source_place_id: placeId, match_count: 6 });
+      if (error) throw error;
+      return (data ?? []) as SimilarPlace[];
+    },
+  });
+}
+
 export function useCreateList() {
   const qc = useQueryClient();
   const { session } = useAuth();

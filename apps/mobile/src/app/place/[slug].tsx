@@ -13,14 +13,17 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
-import { usePlace, useMyLogs, useUpsertLog, useDeleteLog } from "../../lib/data";
+import { usePlace, useMyLogs, useUpsertLog, useDeleteLog, useSimilarPlaces } from "../../lib/data";
+import { useRouter } from "expo-router";
 
 /** Rating stored as 0–20 (half steps); shown as 0–10. */
 const shownRating = (r: number) => (r / 2).toFixed(r % 2 ? 1 : 0);
 
 export default function PlaceScreen() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
+  const router = useRouter();
   const { data: place, isPending, isError } = usePlace(slug ?? "");
+  const { data: similar } = useSimilarPlaces(place?.id);
   const { data: logs } = useMyLogs();
   const upsert = useUpsertLog();
   const remove = useDeleteLog();
@@ -143,6 +146,27 @@ export default function PlaceScreen() {
             <Text style={styles.buttonText}>Visit website</Text>
           </Pressable>
         ) : null}
+
+        {similar && similar.length > 0 && (
+          <View style={styles.card}>
+            <Text style={type.heading}>Similar {skin.vocab.places}</Text>
+            {similar.map((s) => (
+              <Pressable
+                key={s.id}
+                style={styles.similarRow}
+                onPress={() => router.push(`/place/${s.slug}`)}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={type.body} numberOfLines={1}>{s.name}</Text>
+                  <Text style={type.caption}>
+                    {[s.city, s.region].filter(Boolean).join(", ")}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+              </Pressable>
+            ))}
+          </View>
+        )}
       </ScrollView>
     </>
   );
@@ -179,6 +203,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   card: { backgroundColor: colors.surface, borderRadius: 12, padding: spacing.md, marginTop: spacing.md },
+  similarRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#EEE9DD",
+    marginTop: spacing.xs,
+  },
   factRow: { flexDirection: "row", alignItems: "center", paddingVertical: spacing.xs },
   button: {
     marginTop: spacing.md,
