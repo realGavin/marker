@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Skin } from "@marker/core";
 import { curatedLists } from "../seeds/curated-lists";
+import { tripTemplates } from "../seeds/trip-templates";
 
 /** Golf-specific facts stored in a place row's `attrs` JSONB. All optional: open data is sparse. */
 export const golfAttributes = z.object({
@@ -60,6 +61,7 @@ export const golfSkin: Skin = {
     return facts;
   },
   curatedLists,
+  tripTemplates,
 };
 
 export default golfSkin;

@@ -54,6 +54,15 @@ export interface CuratedListSeed {
   placeSlugs: string[];
 }
 
+/** A precomputed trip template (the zero-AI-cost "recommendor" content). */
+export interface TripTemplate {
+  slug: string;
+  title: string;
+  description: string;
+  days: number;
+  placeSlugs: string[];
+}
+
 export interface Skin {
   /** Stable niche identifier stored on every place row, e.g. "hiking". */
   nicheId: string;
@@ -70,4 +79,6 @@ export interface Skin {
    */
   attributeFacts: (attrs: unknown) => Array<{ label: string; value: string }>;
   curatedLists: CuratedListSeed[];
+  /** Precomputed trip inspiration shown on the trips surface. */
+  tripTemplates: TripTemplate[];
 }

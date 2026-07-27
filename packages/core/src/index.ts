@@ -3,5 +3,6 @@ export type {
   SkinVocabulary,
   SkinTheme,
   CuratedListSeed,
+  TripTemplate,
 } from "./skin";
 export * from "./domain";

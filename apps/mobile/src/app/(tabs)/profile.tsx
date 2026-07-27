@@ -55,6 +55,12 @@ export default function ProfileScreen() {
         <Text style={styles.shareText}>{sharing ? "Preparing…" : "Share my map"}</Text>
       </Pressable>
 
+      <Pressable style={styles.tripsRow} onPress={() => router.push("/trips")}>
+        <Ionicons name="airplane" size={20} color={colors.primary} />
+        <Text style={[type.body, { flex: 1, fontWeight: "600" }]}>{skin.vocab.planTrip}</Text>
+        <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+      </Pressable>
+
       <View style={styles.statsCard}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
           <Text style={type.heading}>Your stats</Text>
@@ -103,6 +109,15 @@ function StatsByRegion({ logs }: { logs: import("../../lib/data").MyLog[] }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   statsCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    padding: spacing.md,
+    marginTop: spacing.lg,
+  },
+  tripsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
     backgroundColor: colors.surface,
     borderRadius: 12,
     padding: spacing.md,
