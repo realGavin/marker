@@ -53,6 +53,28 @@ export function usePlace(slug: string) {
   });
 }
 
+export interface Profile {
+  id: string;
+  handle: string | null;
+  display_name: string | null;
+}
+
+export function useProfile() {
+  const { session } = useAuth();
+  return useQuery({
+    queryKey: ["profile", session?.user.id],
+    enabled: !!session,
+    queryFn: async (): Promise<Profile | null> => {
+      const { data, error } = await sb()
+        .from("profiles")
+        .select("id,handle,display_name")
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
 /** All of the signed-in user's logs, joined with place basics. */
 export function useMyLogs() {
   const { session } = useAuth();
