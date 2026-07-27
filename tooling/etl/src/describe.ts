@@ -147,18 +147,22 @@ export async function describe(): Promise<void> {
   }
 
   // patch in chunks via slug filter
-  for (let i = 0; i < updates.length; i += 200) {
-    const chunk = updates.slice(i, i + 200);
+  for (let i = 0; i < updates.length; i += 50) {
+    const chunk = updates.slice(i, i + 50);
     await Promise.all(
       chunk.map(async (u) => {
-        const res = await fetch(
-          `${url}/rest/v1/places?niche_id=eq.golf&slug=eq.${encodeURIComponent(u.slug)}`,
-          { method: "PATCH", headers, body: JSON.stringify({ description: u.description }) },
-        );
-        if (!res.ok) throw new Error(`patch ${u.slug}: ${res.status}`);
+        for (let attempt = 1; ; attempt++) {
+          const res = await fetch(
+            `${url}/rest/v1/places?niche_id=eq.golf&slug=eq.${encodeURIComponent(u.slug)}`,
+            { method: "PATCH", headers, body: JSON.stringify({ description: u.description }) },
+          ).catch(() => null);
+          if (res?.ok) return;
+          if (attempt >= 4) throw new Error(`patch ${u.slug}: ${res?.status ?? "network"} after ${attempt} tries`);
+          await new Promise((r) => setTimeout(r, 1000 * attempt));
+        }
       }),
     );
-    if ((i / 200) % 5 === 0) console.log(`saved ${Math.min(i + 200, updates.length)}/${updates.length}`);
+    if ((i / 50) % 20 === 0) console.log(`saved ${Math.min(i + 50, updates.length)}/${updates.length}`);
   }
 
   // batch pricing: haiku $1/$5 per MTok, 50% batch discount
