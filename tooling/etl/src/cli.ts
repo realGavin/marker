@@ -28,6 +28,15 @@ switch (cmd) {
   case "scrub":
     await (await import("./scrub.js")).scrub();
     break;
+  case "photos":
+    await (await import("./photos.js")).photos();
+    break;
+  case "photos-report":
+    await (await import("./photos.js")).photosReport();
+    break;
+  case "photos-upload":
+    await (await import("./photos-upload.js")).photosUpload();
+    break;
   case "transform":
     await transform();
     break;

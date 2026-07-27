@@ -10,27 +10,34 @@ export interface Pin {
   lat: number;
   lng: number;
   region: string;
+  /** Filter tags emitted by the ETL; keys match skin.pinFilters. */
+  tags: string[];
 }
 
-type Tuple = [string, string, number, number, string];
+type Tuple = [string, string, number, number, string, string[]?];
 
-export const pins: Pin[] = (raw as Tuple[]).map(([slug, name, lat, lng, region]) => ({
+export const pins: Pin[] = (raw as Tuple[]).map(([slug, name, lat, lng, region, tags]) => ({
   slug,
   name,
   lat,
   lng,
   region,
+  tags: tags ?? [],
 }));
 
-export const pinsGeoJSON = {
-  type: "FeatureCollection" as const,
-  features: pins.map((p) => ({
-    type: "Feature" as const,
-    id: p.slug,
-    properties: { slug: p.slug, name: p.name, region: p.region },
-    geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
-  })),
-};
+export function toGeoJSON(rows: Pin[]) {
+  return {
+    type: "FeatureCollection" as const,
+    features: rows.map((p) => ({
+      type: "Feature" as const,
+      id: p.slug,
+      properties: { slug: p.slug, name: p.name, region: p.region },
+      geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
+    })),
+  };
+}
+
+export const pinsGeoJSON = toGeoJSON(pins);
 
 const norm = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9 ]/g, "");
 

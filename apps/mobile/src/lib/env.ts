@@ -10,7 +10,14 @@ export const env = {
   tileUrl:
     process.env.EXPO_PUBLIC_TILE_URL ??
     "http://127.0.0.1:8082/basemap-us/{z}/{x}/{y}.mvt",
+  /** Aerial photo endpoint; {slug} is replaced per place. Empty = no photos. */
+  photoUrl: process.env.EXPO_PUBLIC_PHOTO_URL ?? "",
 };
+
+/** Aerial photo URL for a place, or null when photos aren't configured. */
+export function photoUrl(slug: string): string | null {
+  return env.photoUrl ? env.photoUrl.replace("{slug}", slug) : null;
+}
 
 export const isBackendConfigured =
   env.supabaseUrl.startsWith("https://") && env.supabaseAnonKey.length > 20;

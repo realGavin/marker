@@ -45,6 +45,22 @@ export interface SkinTheme {
   };
 }
 
+/** One welcome-carousel slide shown before sign-in. `icon` is an Ionicons name. */
+export interface IntroSlide {
+  icon: string;
+  title: string;
+  body: string;
+}
+
+/**
+ * A toggleable map/search filter chip. `key` must match a tag the niche's ETL
+ * writes into the bundled pin dataset (pins.json tuples carry a tags array).
+ */
+export interface PinFilter {
+  key: string;
+  label: string;
+}
+
 /** A curated list shipped with the skin, seeded into the DB as owner='system'. */
 export interface CuratedListSeed {
   slug: string;
@@ -81,4 +97,8 @@ export interface Skin {
   curatedLists: CuratedListSeed[];
   /** Precomputed trip inspiration shown on the trips surface. */
   tripTemplates: TripTemplate[];
+  /** Welcome carousel shown before sign-in. */
+  introSlides: IntroSlide[];
+  /** Filter chips offered on the map; keys match pin-data tags. */
+  pinFilters: PinFilter[];
 }

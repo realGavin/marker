@@ -28,11 +28,37 @@ class R2Source implements Source {
 const pmCache = new ResolvedValueCache(64, true);
 
 const TILE_PATH = /^\/([0-9a-z-_]+)\/(\d+)\/(\d+)\/(\d+)\.mvt$/i;
+const PHOTO_PATH = /^\/photos\/([0-9a-z-]+)\.jpg$/i;
+
+/** Aerial place photos: straight R2 reads, edge-cached hard (immutable data). */
+async function servePhoto(slug: string, env: Env): Promise<Response> {
+  const obj = await env.BUCKET.get(`photos/${slug}.jpg`);
+  if (!obj) return new Response("not found", { status: 404 });
+  return new Response(obj.body, {
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Content-Type": "image/jpeg",
+    },
+  });
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
     const url = new URL(request.url);
+
+    const photo = PHOTO_PATH.exec(url.pathname);
+    if (photo) {
+      const cache = caches.default;
+      const cacheKey = new Request(url.toString());
+      const hit = await cache.match(cacheKey);
+      if (hit) return hit;
+      const resp = await servePhoto(photo[1]!, env);
+      if (resp.ok) ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+      return resp;
+    }
+
     const m = TILE_PATH.exec(url.pathname);
     if (!m) return new Response("not found", { status: 404 });
     const [, archive, zs, xs, ys] = m;

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -10,12 +10,74 @@ import {
   View,
 } from "react-native";
 import * as AppleAuthentication from "expo-apple-authentication";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { skin } from "../skin";
 import { getSupabase } from "../lib/supabase";
 import { isBackendConfigured } from "../lib/env";
 import { colors, spacing, type } from "../ui/theme";
 
+/**
+ * Value-prop carousel shown before sign-in. State-driven paging: programmatic
+ * ScrollView.scrollTo is a silent no-op on this RN/Fabric version, so slides
+ * swap by state and swipes are detected from raw touch deltas instead.
+ */
+function Intro({ onDone }: { onDone: () => void }) {
+  const [page, setPage] = useState(0);
+  const touchX = useRef(0);
+  const slides = skin.introSlides;
+  const last = page === slides.length - 1;
+  const slide = slides[page]!;
+
+  const go = (delta: number) =>
+    setPage((p) => Math.min(Math.max(p + delta, 0), slides.length - 1));
+  const next = () => (last ? onDone() : go(1));
+
+  return (
+    <View style={styles.introContainer}>
+      <View
+        style={styles.slide}
+        onTouchStart={(e) => {
+          touchX.current = e.nativeEvent.pageX;
+        }}
+        onTouchEnd={(e) => {
+          const dx = e.nativeEvent.pageX - touchX.current;
+          if (dx < -50) go(1);
+          else if (dx > 50) go(-1);
+        }}
+      >
+        <View style={styles.slideIcon}>
+          <Ionicons name={slide.icon as never} size={44} color={colors.primary} />
+        </View>
+        <Text style={[type.title, { textAlign: "center" }]}>{slide.title}</Text>
+        <Text style={[type.body, styles.slideBody]}>{slide.body}</Text>
+      </View>
+
+      <View style={styles.dots}>
+        {slides.map((s, i) => (
+          <View key={s.title} style={[styles.dot, i === page && styles.dotActive]} />
+        ))}
+      </View>
+      <Pressable style={styles.introButton} onPress={next}>
+        <Text style={styles.introButtonText}>{last ? "Get started" : "Next"}</Text>
+      </Pressable>
+      {!last && (
+        <Pressable onPress={onDone} hitSlop={8}>
+          <Text style={[type.caption, { textAlign: "center", marginTop: spacing.md }]}>Skip</Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
 export default function SignIn() {
+  const [introDone, setIntroDone] = useState(false);
+  if (!introDone && skin.introSlides.length > 0) {
+    return <Intro onDone={() => setIntroDone(true)} />;
+  }
+  return <SignInForm />;
+}
+
+function SignInForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"signIn" | "signUp">("signIn");
@@ -131,6 +193,45 @@ export default function SignIn() {
 }
 
 const styles = StyleSheet.create({
+  introContainer: {
+    flex: 1,
+    backgroundColor: colors.background,
+    paddingTop: 100,
+    paddingBottom: 60,
+  },
+  slide: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.xl,
+  },
+  slideIcon: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#E8EFE9",
+    marginBottom: spacing.lg,
+  },
+  slideBody: { textAlign: "center", marginTop: spacing.sm, color: colors.textSecondary },
+  dots: {
+    flexDirection: "row",
+    gap: 8,
+    alignSelf: "center",
+    marginVertical: spacing.lg,
+  },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#D5D0C4" },
+  dotActive: { backgroundColor: colors.primary },
+  introButton: {
+    marginHorizontal: spacing.lg,
+    height: 50,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primary,
+  },
+  introButtonText: { color: "#FFF", fontSize: 16, fontWeight: "700" },
   container: {
     flex: 1,
     alignItems: "center",

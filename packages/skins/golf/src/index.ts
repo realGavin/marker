@@ -62,6 +62,27 @@ export const golfSkin: Skin = {
   },
   curatedLists,
   tripTemplates,
+  introSlides: [
+    {
+      icon: "map",
+      title: "Every course, one map",
+      body: "12,000+ US golf courses on a map that works offline. Find them anywhere, from majors venues to your local muni.",
+    },
+    {
+      icon: "checkmark-circle",
+      title: "Log every round",
+      body: "Mark courses played, rate them out of 10, and chase bucket lists like the Top 100 Publics.",
+    },
+    {
+      icon: "share-social",
+      title: "Share your course map",
+      body: "Your played courses become a beautiful card worth showing off.",
+    },
+  ],
+  // OSM hole/access coverage is <1%, so attribute chips would filter to a
+  // handful of pins. Status chips (played/want) come from the engine; add
+  // attribute filters here once the data is enriched.
+  pinFilters: [],
 };
 
 export default golfSkin;

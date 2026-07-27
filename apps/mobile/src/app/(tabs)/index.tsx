@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import {
   Camera,
   GeoJSONSource,
@@ -14,8 +14,9 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
 import { buildMapStyle } from "../../lib/map-style";
-import { pins, pinsGeoJSON, searchPins, type Pin } from "../../lib/pins";
+import { pins, pinsGeoJSON, searchPins, toGeoJSON, type Pin } from "../../lib/pins";
 import { useMyLogs, useProfile, useUpsertLog, usePlace } from "../../lib/data";
+import { PlacePhoto } from "../../ui/PlacePhoto";
 
 const US_CENTER: [number, number] = [-98.5, 39.8];
 
@@ -41,6 +42,25 @@ export default function MapScreen() {
   const mapStyle = useMemo(buildMapStyle, []);
   const results = useMemo(() => searchPins(query), [query]);
   const { data: logs } = useMyLogs();
+  // one active filter at a time: a log status or a skin-defined tag
+  const [filter, setFilter] = useState<string | null>(null);
+
+  const filteredGeoJSON = useMemo(() => {
+    if (!filter) return pinsGeoJSON;
+    if (filter === "visited" || filter === "want") {
+      const slugs = new Set(
+        (logs ?? []).filter((l) => l.status === filter).map((l) => l.place.slug),
+      );
+      return toGeoJSON(pins.filter((p) => slugs.has(p.slug)));
+    }
+    return toGeoJSON(pins.filter((p) => p.tags.includes(filter)));
+  }, [filter, logs]);
+
+  const chips: Array<{ key: string; label: string }> = [
+    { key: "visited", label: skin.vocab.visited },
+    { key: "want", label: skin.vocab.wantTo },
+    ...skin.pinFilters,
+  ];
 
   // color pins by the user's log status
   const pinColor = useMemo(() => {
@@ -96,7 +116,7 @@ export default function MapScreen() {
         <GeoJSONSource
           ref={source}
           id="places"
-          data={pinsGeoJSON}
+          data={filteredGeoJSON}
           cluster
           clusterRadius={45}
           clusterMaxZoom={13}
@@ -156,6 +176,27 @@ export default function MapScreen() {
             </Pressable>
           )}
         </View>
+        {query.length === 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={{ marginTop: spacing.xs }}
+            contentContainerStyle={{ gap: spacing.xs }}
+          >
+            {chips.map((c) => {
+              const active = filter === c.key;
+              return (
+                <Pressable
+                  key={c.key}
+                  style={[styles.chip, active && styles.chipActive]}
+                  onPress={() => setFilter(active ? null : c.key)}
+                >
+                  <Text style={[styles.chipText, active && { color: "#FFF" }]}>{c.label}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        )}
         {results.length > 0 && (
           <FlatList
             style={styles.results}
@@ -191,6 +232,7 @@ function PreviewCard({ pin, onClose }: { pin: Pin; onClose: () => void }) {
 
   return (
     <View style={styles.preview}>
+      <PlacePhoto slug={pin.slug} height={120} style={{ marginBottom: spacing.sm }} />
       <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
         <View style={{ flex: 1 }}>
           <Text style={type.heading} numberOfLines={1}>{pin.name}</Text>
@@ -249,6 +291,20 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
   },
   searchInput: { flex: 1, fontSize: 16, color: colors.textPrimary },
+  chip: {
+    paddingHorizontal: spacing.md,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  chipActive: { backgroundColor: colors.primary },
+  chipText: { fontSize: 13, fontWeight: "600", color: colors.textPrimary },
   results: {
     marginTop: spacing.xs,
     backgroundColor: colors.surface,

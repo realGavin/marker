@@ -18,6 +18,12 @@ export function supabaseUrl(): string {
   return url;
 }
 
+export function env(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`${name} missing in tooling/etl/.env`);
+  return v;
+}
+
 export function serviceHeaders(): Record<string, string> {
   const key = process.env.SUPABASE_SECRET_KEY;
   if (!key) throw new Error("SUPABASE_SECRET_KEY missing in tooling/etl/.env");

@@ -26,6 +26,7 @@ import {
   useCreateList,
 } from "../../lib/data";
 import { useRouter } from "expo-router";
+import { PlacePhoto } from "../../ui/PlacePhoto";
 
 /** Rating stored as 0–20 (half steps); shown as 0–10. */
 const shownRating = (r: number) => (r / 2).toFixed(r % 2 ? 1 : 0);
@@ -94,6 +95,7 @@ export default function PlaceScreen() {
     <>
       <Stack.Screen options={{ title: place.name, headerBackTitle: "Back" }} />
       <ScrollView style={styles.container} contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl * 2 }}>
+        <PlacePhoto slug={place.slug} height={190} style={{ marginBottom: spacing.md }} />
         <Text style={type.title}>{place.name}</Text>
         {location ? <Text style={[type.caption, { marginTop: spacing.xs }]}>{location}</Text> : null}
 
