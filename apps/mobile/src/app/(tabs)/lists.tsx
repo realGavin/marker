@@ -4,6 +4,9 @@ import { useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors, spacing, type } from "../../ui/theme";
 import { useCreateList, useListItems, useLists, useMyLogs } from "../../lib/data";
+import { usePurchases } from "../../providers/purchases";
+
+const FREE_LIST_LIMIT = 3;
 
 export default function ListsScreen() {
   const router = useRouter();
@@ -17,8 +20,14 @@ export default function ListsScreen() {
   const curated = (lists ?? []).filter((l) => l.owner_id === null);
   const mine = (lists ?? []).filter((l) => l.owner_id !== null);
 
+  const { isPro } = usePurchases();
+
   const onCreate = () => {
     if (creating) return;
+    if (!isPro && mine.length >= FREE_LIST_LIMIT) {
+      router.push("/paywall");
+      return;
+    }
     Alert.prompt("New list", "Name your list", (title) => {
       if (title?.trim()) {
         setCreating(true);

@@ -2,6 +2,7 @@ import React from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { AuthProvider, useAuth } from "../providers/auth";
+import { PurchasesProvider } from "../providers/purchases";
 import { QueryProvider } from "../providers/query";
 import { isBackendConfigured } from "../lib/env";
 import { colors } from "../ui/theme";
@@ -32,6 +33,7 @@ function Gate() {
           name="list/[id]"
           options={{ headerShown: true, headerStyle: { backgroundColor: colors.background }, headerTintColor: colors.primary, title: "" }}
         />
+        <Stack.Screen name="paywall" options={{ presentation: "modal" }} />
       </Stack.Protected>
       <Stack.Protected guard={!signedIn}>
         <Stack.Screen name="sign-in" />
@@ -43,10 +45,12 @@ function Gate() {
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <QueryProvider>
-        <StatusBar style="dark" />
-        <Gate />
-      </QueryProvider>
+      <PurchasesProvider>
+        <QueryProvider>
+          <StatusBar style="dark" />
+          <Gate />
+        </QueryProvider>
+      </PurchasesProvider>
     </AuthProvider>
   );
 }

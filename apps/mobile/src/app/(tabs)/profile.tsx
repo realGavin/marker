@@ -3,14 +3,18 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-nati
 import { captureRef } from "react-native-view-shot";
 import * as Sharing from "expo-sharing";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import { useRouter } from "expo-router";
 import { useAuth } from "../../providers/auth";
+import { usePurchases } from "../../providers/purchases";
 import { useMyLogs, useProfile } from "../../lib/data";
 import { ShareCard } from "../../ui/ShareCard";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
 
 export default function ProfileScreen() {
+  const router = useRouter();
   const { session, signOut } = useAuth();
+  const { isPro } = usePurchases();
   const { data: logs } = useMyLogs();
   const { data: profile } = useProfile();
   const cardRef = useRef<View>(null);
@@ -51,6 +55,22 @@ export default function ProfileScreen() {
         <Text style={styles.shareText}>{sharing ? "Preparing…" : "Share my map"}</Text>
       </Pressable>
 
+      <View style={styles.statsCard}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+          <Text style={type.heading}>Your stats</Text>
+          {!isPro && <Ionicons name="lock-closed" size={14} color={colors.accent} />}
+        </View>
+        {isPro ? (
+          <StatsByRegion logs={logs ?? []} />
+        ) : (
+          <Pressable onPress={() => router.push("/paywall")}>
+            <Text style={[type.caption, { marginTop: spacing.xs }]}>
+              Breakdowns by state and year — unlock with Pro.
+            </Text>
+          </Pressable>
+        )}
+      </View>
+
       <Pressable style={styles.signOut} onPress={signOut}>
         <Text style={[type.caption, { color: colors.textSecondary }]}>Sign out</Text>
       </Pressable>
@@ -58,8 +78,36 @@ export default function ProfileScreen() {
   );
 }
 
+function StatsByRegion({ logs }: { logs: import("../../lib/data").MyLog[] }) {
+  const byRegion = new Map<string, number>();
+  for (const l of logs) {
+    if (l.status !== "visited" || !l.place.region) continue;
+    byRegion.set(l.place.region, (byRegion.get(l.place.region) ?? 0) + 1);
+  }
+  const rows = [...byRegion.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  if (rows.length === 0) {
+    return <Text style={[type.caption, { marginTop: spacing.xs }]}>Log somewhere to see your breakdown.</Text>;
+  }
+  return (
+    <View style={{ marginTop: spacing.sm, gap: 4 }}>
+      {rows.map(([region, n]) => (
+        <View key={region} style={{ flexDirection: "row", justifyContent: "space-between" }}>
+          <Text style={type.body}>{region}</Text>
+          <Text style={[type.body, { fontWeight: "700", color: colors.primary }]}>{n}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  statsCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    padding: spacing.md,
+    marginTop: spacing.lg,
+  },
   shareButton: {
     flexDirection: "row",
     gap: spacing.xs,
