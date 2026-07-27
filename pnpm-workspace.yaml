@@ -3,3 +3,4 @@ packages:
   - packages/*
   - packages/skins/*
   - tooling/*
+  - infra/*

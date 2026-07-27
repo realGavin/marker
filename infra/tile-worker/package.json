@@ -1,0 +1,17 @@
+{
+  "name": "@marker/tile-worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pmtiles": "^4.3.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260101.0",
+    "typescript": "~5.7.0",
+    "wrangler": "^4.86.0"
+  }
+}
