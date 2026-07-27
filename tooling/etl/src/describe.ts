@@ -15,9 +15,11 @@ const BATCH_STATE = new URL("../data/describe-batch.json", import.meta.url).path
 const SYSTEM = `You write short, editorial descriptions for a place-collection app.
 Rules — these are absolute:
 - Use ONLY the facts provided in the message. Do not add any fact from outside knowledge: no designers, years, prices, rankings, tournaments, hole details, or history.
-- Never mention prices, fees, or costs.
+- If "access" is not in the facts, you must NOT state or imply who can play there: no "private", "members", "membership", "public course", "municipal", "semi-private", "exclusive", "open to all". Names are not evidence — a "Country Club" is not necessarily private.
+- Do not infer geography from the name: a place named "Lakeview", "Links", "Bay", or "Seaside" gets no lake, links, bay, or sea claims unless the facts say so.
+- Never state a hole count (in digits or words) unless "holes" is in the facts. Never mention prices, fees, or costs. Do not infer or add a city that is not in the facts.
 - 2 sentences, 35-60 words total. Warm, editorial, collector's-guide tone. No hype words like "world-class" or "must-play" unless the facts justify them.
-- If facts are sparse, write an evocative but generic description grounded in the location (city/state) and access type only.
+- If facts are sparse, write an evocative but generic description using only the name and state.
 - Output the description text only — no preamble, no quotes.`;
 
 function factsFor(r: PlaceRow): string {
@@ -32,12 +34,22 @@ function factsFor(r: PlaceRow): string {
   return JSON.stringify(facts);
 }
 
-/** A description may not contain a number absent from the facts, or any price sign. */
-function validate(description: string, facts: string): boolean {
+/**
+ * Grounding gate: no numbers absent from facts, no price signs, no access
+ * claims without an access fact, no hole counts (digits or words) without a
+ * holes fact. Exported for the cleanup scan.
+ */
+export function validate(description: string, facts: string): boolean {
   if (/[$€£]/.test(description)) return false;
   const factNumbers = new Set(facts.match(/\d+/g) ?? []);
   for (const n of description.match(/\d+/g) ?? []) {
     if (!factNumbers.has(n)) return false;
+  }
+  if (!/"access"/.test(facts) && /\b(private|members?-only|membership|members\b|public course|municipal|semi-private|exclusive)\b/i.test(description)) {
+    return false;
+  }
+  if (!/"holes"/.test(facts) && /\b(nine|eighteen|twenty-seven|thirty-six|9|18|27|36)[- ]holes?\b/i.test(description)) {
+    return false;
   }
   return description.length > 40 && description.length < 600;
 }
