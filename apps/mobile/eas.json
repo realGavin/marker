@@ -11,7 +11,7 @@
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_1rDt6Ouulxc_y3dNlh1ptg_MUGsh04w",
         "EXPO_PUBLIC_TILE_URL": "https://marker-tiles.shuozeng21.workers.dev/basemap-us/{z}/{x}/{y}.mvt",
         "EXPO_PUBLIC_PHOTO_URL": "https://marker-tiles.shuozeng21.workers.dev/photos/{slug}.jpg",
-        "EXPO_PUBLIC_REVENUECAT_KEY": "test_ZSFOktiOSMGXjjlEQFyutvBKOTp"
+        "EXPO_PUBLIC_REVENUECAT_KEY": "appl_OJMPhjyrjVGffwcUwGdgxjFvZHe"
       }
     }
   },
