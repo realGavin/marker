@@ -53,10 +53,20 @@ export interface IntroSlide {
 }
 
 /**
- * A toggleable map/search filter chip. `key` must match a tag the niche's ETL
+ * A toggleable map/search filter. `key` must match a tag the niche's ETL
  * writes into the bundled pin dataset (pins.json tuples carry a tags array).
+ * Filters in the same `group` combine as OR (either matches); different
+ * groups combine as AND — so multi-select never contradicts itself.
  */
 export interface PinFilter {
+  key: string;
+  label: string;
+  /** Group key; must exist in Skin.pinFilterGroups. */
+  group: string;
+}
+
+/** Section header for a set of pin filters shown in the filter menu. */
+export interface PinFilterGroup {
   key: string;
   label: string;
 }
@@ -99,6 +109,8 @@ export interface Skin {
   tripTemplates: TripTemplate[];
   /** Welcome carousel shown before sign-in. */
   introSlides: IntroSlide[];
-  /** Filter chips offered on the map; keys match pin-data tags. */
+  /** Filters offered in the map's filter menu; keys match pin-data tags. */
   pinFilters: PinFilter[];
+  /** Section headers for pinFilters, in display order. */
+  pinFilterGroups: PinFilterGroup[];
 }

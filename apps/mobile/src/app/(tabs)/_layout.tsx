@@ -30,6 +30,13 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="trips"
+        options={{
+          title: "Trips",
+          tabBarIcon: ({ color, size }) => <Ionicons name="airplane" color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
         name="log"
         options={{
           title: skin.vocab.myPlaces,

@@ -311,6 +311,17 @@ export function useDeleteList() {
   });
 }
 
+export function useRenameList() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { listId: string; title: string }) => {
+      const { error } = await sb().from("lists").update({ title: input.title }).eq("id", input.listId);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["lists"] }),
+  });
+}
+
 export function useRemoveFromList() {
   const qc = useQueryClient();
   return useMutation({

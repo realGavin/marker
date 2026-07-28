@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import {
   Camera,
   GeoJSONSource,
@@ -42,24 +42,53 @@ export default function MapScreen() {
   const mapStyle = useMemo(buildMapStyle, []);
   const results = useMemo(() => searchPins(query), [query]);
   const { data: logs } = useMyLogs();
-  // one active filter at a time: a log status or a skin-defined tag
-  const [filter, setFilter] = useState<string | null>(null);
+  // multi-select filters: OR within a group, AND across groups
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const toggleFilter = (key: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   const filteredGeoJSON = useMemo(() => {
-    if (!filter) return pinsGeoJSON;
-    if (filter === "visited" || filter === "want") {
-      const slugs = new Set(
-        (logs ?? []).filter((l) => l.status === filter).map((l) => l.place.slug),
-      );
-      return toGeoJSON(pins.filter((p) => slugs.has(p.slug)));
+    if (selected.size === 0) return pinsGeoJSON;
+    const statusSel = ["visited", "want"].filter((k) => selected.has(k));
+    const statusSlugs = new Set(
+      (logs ?? []).filter((l) => statusSel.includes(l.status)).map((l) => l.place.slug),
+    );
+    const tagGroups = new Map<string, string[]>();
+    for (const f of skin.pinFilters) {
+      if (!selected.has(f.key)) continue;
+      tagGroups.set(f.group, [...(tagGroups.get(f.group) ?? []), f.key]);
     }
-    return toGeoJSON(pins.filter((p) => p.tags.includes(filter)));
-  }, [filter, logs]);
+    return toGeoJSON(
+      pins.filter((p) => {
+        if (statusSel.length > 0 && !statusSlugs.has(p.slug)) return false;
+        for (const keys of tagGroups.values()) {
+          if (!keys.some((k) => p.tags.includes(k))) return false;
+        }
+        return true;
+      }),
+    );
+  }, [selected, logs]);
 
-  const chips: Array<{ key: string; label: string }> = [
-    { key: "visited", label: skin.vocab.visited },
-    { key: "want", label: skin.vocab.wantTo },
-    ...skin.pinFilters,
+  // "Your log" is an engine-level group; skin groups follow it
+  const menuSections: Array<{ label: string; options: Array<{ key: string; label: string }> }> = [
+    {
+      label: "Your log",
+      options: [
+        { key: "visited", label: skin.vocab.visited },
+        { key: "want", label: skin.vocab.wantTo },
+      ],
+    },
+    ...skin.pinFilterGroups.map((g) => ({
+      label: g.label,
+      options: skin.pinFilters.filter((f) => f.group === g.key),
+    })),
   ];
 
   // color pins by the user's log status
@@ -177,25 +206,53 @@ export default function MapScreen() {
           )}
         </View>
         {query.length === 0 && (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={{ marginTop: spacing.xs }}
-            contentContainerStyle={{ gap: spacing.xs }}
-          >
-            {chips.map((c) => {
-              const active = filter === c.key;
-              return (
-                <Pressable
-                  key={c.key}
-                  style={[styles.chip, active && styles.chipActive]}
-                  onPress={() => setFilter(active ? null : c.key)}
-                >
-                  <Text style={[styles.chipText, active && { color: "#FFF" }]}>{c.label}</Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+          <View style={{ flexDirection: "row", gap: spacing.xs, marginTop: spacing.xs }}>
+            <Pressable
+              style={[styles.chip, (menuOpen || selected.size > 0) && styles.chipActive]}
+              onPress={() => setMenuOpen(!menuOpen)}
+            >
+              <Ionicons
+                name="funnel"
+                size={13}
+                color={menuOpen || selected.size > 0 ? "#FFF" : colors.textPrimary}
+              />
+              <Text style={[styles.chipText, (menuOpen || selected.size > 0) && { color: "#FFF" }]}>
+                Filters{selected.size > 0 ? ` (${selected.size})` : ""}
+              </Text>
+              <Ionicons
+                name={menuOpen ? "chevron-up" : "chevron-down"}
+                size={13}
+                color={menuOpen || selected.size > 0 ? "#FFF" : colors.textSecondary}
+              />
+            </Pressable>
+            {selected.size > 0 && (
+              <Pressable style={styles.chip} onPress={() => setSelected(new Set())}>
+                <Text style={styles.chipText}>Clear</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+        {menuOpen && query.length === 0 && (
+          <View style={styles.filterMenu}>
+            {menuSections.map((section) => (
+              <View key={section.label}>
+                <Text style={styles.filterHeader}>{section.label}</Text>
+                {section.options.map((o) => {
+                  const on = selected.has(o.key);
+                  return (
+                    <Pressable key={o.key} style={styles.filterRow} onPress={() => toggleFilter(o.key)}>
+                      <Ionicons
+                        name={on ? "checkbox" : "square-outline"}
+                        size={20}
+                        color={on ? colors.primary : colors.textSecondary}
+                      />
+                      <Text style={type.body}>{o.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
         )}
         {results.length > 0 && (
           <FlatList
@@ -313,6 +370,8 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, fontSize: 16, color: colors.textPrimary },
   chip: {
+    flexDirection: "row",
+    gap: 5,
     paddingHorizontal: spacing.md,
     height: 32,
     borderRadius: 16,
@@ -326,6 +385,32 @@ const styles = StyleSheet.create({
   },
   chipActive: { backgroundColor: colors.primary },
   chipText: { fontSize: 13, fontWeight: "600", color: colors.textPrimary },
+  filterMenu: {
+    marginTop: spacing.xs,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  filterHeader: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.textSecondary,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginTop: spacing.sm,
+    marginBottom: 2,
+  },
+  filterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: 7,
+  },
   results: {
     marginTop: spacing.xs,
     backgroundColor: colors.surface,

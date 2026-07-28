@@ -81,14 +81,18 @@ export const golfSkin: Skin = {
   ],
   // Keys match tags the ETL writes into pins.json: hole counts derived from
   // mapped hole/green ways, access from explicit tags + name signals.
-  // No "Public" chip: only ~2.5% of courses carry an explicit public signal,
-  // so the chip would hide thousands of actually-public courses. "Private"
+  // No "Public" option: only ~2.5% of courses carry an explicit public signal,
+  // so it would hide thousands of actually-public courses. "Private"
   // coverage (explicit tags + "Country Club" names) matches the real-world
   // ~25% private share, so that one is honest to ship.
+  pinFilterGroups: [
+    { key: "holes", label: "Holes" },
+    { key: "access", label: "Access" },
+  ],
   pinFilters: [
-    { key: "18", label: "18 holes" },
-    { key: "9", label: "9 holes" },
-    { key: "private", label: "Private" },
+    { key: "18", label: "18 holes", group: "holes" },
+    { key: "9", label: "9 holes", group: "holes" },
+    { key: "private", label: "Private", group: "access" },
   ],
 };
 

@@ -40,7 +40,6 @@ function Gate() {
           options={{ headerShown: true, headerStyle: { backgroundColor: colors.background }, headerTintColor: colors.primary, title: "" }}
         />
         <Stack.Screen name="paywall" options={{ presentation: "modal" }} />
-        <Stack.Screen name="trips" />
       </Stack.Protected>
       <Stack.Protected guard={!signedIn}>
         <Stack.Screen name="sign-in" />

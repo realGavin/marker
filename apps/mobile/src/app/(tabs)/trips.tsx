@@ -9,11 +9,11 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Stack, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { TripTemplate } from "@marker/core";
-import { skin } from "../skin";
-import { colors, spacing, type } from "../ui/theme";
+import { skin } from "../../skin";
+import { colors, spacing, type } from "../../ui/theme";
 import {
   useMyLogs,
   usePlanTrip,
@@ -21,7 +21,7 @@ import {
   useTripPlans,
   useUpsertLog,
   type TripItinerary,
-} from "../lib/data";
+} from "../../lib/data";
 
 const BUDGETS = ["any", "$", "$$", "$$$"] as const;
 
@@ -82,14 +82,6 @@ export default function TripsScreen() {
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: "Trips",
-          headerShown: true,
-          headerStyle: { backgroundColor: colors.background },
-          headerTintColor: colors.primary,
-        }}
-      />
       <ScrollView style={styles.container} contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl * 2 }}>
         <Text style={type.title}>{skin.vocab.planTrip}</Text>
         <Text style={[type.caption, { marginTop: spacing.xs, marginBottom: spacing.md }]}>
