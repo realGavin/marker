@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { getSupabase } from "../../lib/supabase";
 import { captureRef } from "react-native-view-shot";
 import * as Sharing from "expo-sharing";
@@ -55,7 +55,19 @@ export default function ProfileScreen() {
 
       <Pressable style={[styles.shareButton, sharing && { opacity: 0.6 }]} onPress={share} disabled={sharing}>
         <Ionicons name="share-outline" size={19} color="#FFF" />
-        <Text style={styles.shareText}>{sharing ? "Preparing…" : "Share my map"}</Text>
+        <Text style={styles.shareText}>{sharing ? "Preparing…" : "Share my card"}</Text>
+      </Pressable>
+
+      <Pressable
+        style={styles.inviteButton}
+        onPress={() =>
+          Share.share({
+            message: `I'm logging every one of my ${skin.vocab.places} on ${skin.vocab.appName}${handle ? ` — I'm @${handle}` : ""}. Get it and send me your card!`,
+          }).catch(() => {})
+        }
+      >
+        <Ionicons name="person-add-outline" size={18} color={colors.primary} />
+        <Text style={styles.inviteText}>Invite friends</Text>
       </Pressable>
 
       <View style={styles.statsCard}>
@@ -155,5 +167,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   shareText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+  inviteButton: {
+    flexDirection: "row",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    height: 46,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: colors.surface,
+  },
+  inviteText: { color: colors.primary, fontSize: 15, fontWeight: "700" },
   signOut: { alignItems: "center", marginTop: spacing.xl },
 });

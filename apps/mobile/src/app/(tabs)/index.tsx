@@ -45,6 +45,22 @@ export default function MapScreen() {
   // multi-select filters: OR within a group, AND across groups
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [menuOpen, setMenuOpen] = useState(false);
+  // distance ring is radio-style: one radius at a time, anchored on the user
+  const [radiusMi, setRadiusMi] = useState<number | null>(null);
+  const [userLoc, setUserLoc] = useState<[number, number] | null>(null);
+
+  const pickRadius = async (mi: number) => {
+    if (radiusMi === mi) {
+      setRadiusMi(null);
+      return;
+    }
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== "granted") return;
+    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    setUserLoc([loc.coords.latitude, loc.coords.longitude]);
+    setRadiusMi(mi);
+    camera.current?.flyTo({ center: [loc.coords.longitude, loc.coords.latitude], zoom: mi >= 100 ? 7 : mi >= 50 ? 8 : 9, duration: 800 });
+  };
 
   const toggleFilter = (key: string) =>
     setSelected((prev) => {
@@ -55,7 +71,7 @@ export default function MapScreen() {
     });
 
   const filteredGeoJSON = useMemo(() => {
-    if (selected.size === 0) return pinsGeoJSON;
+    if (selected.size === 0 && !(radiusMi && userLoc)) return pinsGeoJSON;
     const statusSel = ["visited", "want"].filter((k) => selected.has(k));
     const statusSlugs = new Set(
       (logs ?? []).filter((l) => statusSel.includes(l.status)).map((l) => l.place.slug),
@@ -65,16 +81,25 @@ export default function MapScreen() {
       if (!selected.has(f.key)) continue;
       tagGroups.set(f.group, [...(tagGroups.get(f.group) ?? []), f.key]);
     }
+    // flat-earth distance is fine at these radii
+    const maxDegSq = radiusMi ? (radiusMi * 1609.34 / 111_320) ** 2 : null;
+    const cosLat = userLoc ? Math.cos((userLoc[0] * Math.PI) / 180) : 1;
     return toGeoJSON(
       pins.filter((p) => {
         if (statusSel.length > 0 && !statusSlugs.has(p.slug)) return false;
         for (const keys of tagGroups.values()) {
           if (!keys.some((k) => p.tags.includes(k))) return false;
         }
+        if (maxDegSq && userLoc) {
+          const d2 = (p.lat - userLoc[0]) ** 2 + ((p.lng - userLoc[1]) * cosLat) ** 2;
+          if (d2 > maxDegSq) return false;
+        }
         return true;
       }),
     );
-  }, [selected, logs]);
+  }, [selected, logs, radiusMi, userLoc]);
+
+  const activeCount = selected.size + (radiusMi ? 1 : 0);
 
   // "Your log" is an engine-level group; skin groups follow it
   const menuSections: Array<{ label: string; options: Array<{ key: string; label: string }> }> = [
@@ -208,25 +233,31 @@ export default function MapScreen() {
         {query.length === 0 && (
           <View style={{ flexDirection: "row", gap: spacing.xs, marginTop: spacing.xs }}>
             <Pressable
-              style={[styles.chip, (menuOpen || selected.size > 0) && styles.chipActive]}
+              style={[styles.chip, (menuOpen || activeCount > 0) && styles.chipActive]}
               onPress={() => setMenuOpen(!menuOpen)}
             >
               <Ionicons
                 name="funnel"
                 size={13}
-                color={menuOpen || selected.size > 0 ? "#FFF" : colors.textPrimary}
+                color={menuOpen || activeCount > 0 ? "#FFF" : colors.textPrimary}
               />
-              <Text style={[styles.chipText, (menuOpen || selected.size > 0) && { color: "#FFF" }]}>
-                Filters{selected.size > 0 ? ` (${selected.size})` : ""}
+              <Text style={[styles.chipText, (menuOpen || activeCount > 0) && { color: "#FFF" }]}>
+                Filters{activeCount > 0 ? ` (${activeCount})` : ""}
               </Text>
               <Ionicons
                 name={menuOpen ? "chevron-up" : "chevron-down"}
                 size={13}
-                color={menuOpen || selected.size > 0 ? "#FFF" : colors.textSecondary}
+                color={menuOpen || activeCount > 0 ? "#FFF" : colors.textSecondary}
               />
             </Pressable>
-            {selected.size > 0 && (
-              <Pressable style={styles.chip} onPress={() => setSelected(new Set())}>
+            {activeCount > 0 && (
+              <Pressable
+                style={styles.chip}
+                onPress={() => {
+                  setSelected(new Set());
+                  setRadiusMi(null);
+                }}
+              >
                 <Text style={styles.chipText}>Clear</Text>
               </Pressable>
             )}
@@ -252,6 +283,20 @@ export default function MapScreen() {
                 })}
               </View>
             ))}
+            <Text style={styles.filterHeader}>Distance from me</Text>
+            {[25, 50, 100].map((mi) => {
+              const on = radiusMi === mi;
+              return (
+                <Pressable key={mi} style={styles.filterRow} onPress={() => pickRadius(mi)}>
+                  <Ionicons
+                    name={on ? "radio-button-on" : "radio-button-off"}
+                    size={20}
+                    color={on ? colors.primary : colors.textSecondary}
+                  />
+                  <Text style={type.body}>Within {mi} miles</Text>
+                </Pressable>
+              );
+            })}
           </View>
         )}
         {results.length > 0 && (

@@ -17,14 +17,12 @@ function tags(r: PlaceRow): string[] {
     if (holes >= 14) t.push("18");
     else if (holes >= 4) t.push("9");
   }
+  // Complementary access tags: "private" = explicit tag or Country Club name;
+  // "public" = everything else (most US courses are public; explicit public
+  // tagging is ~2.5%, so absence-of-private-signal is the honest proxy).
   const name = r.name.toLowerCase();
-  const isPublic =
-    r.attrs.access === "public" ||
-    r.attrs.access === "municipal" ||
-    /\b(municipal|muni|park district|county|city of)\b/.test(name);
   const isPrivate = r.attrs.access === "private" || /\bcountry club\b/.test(name);
-  if (isPublic) t.push("public");
-  else if (isPrivate) t.push("private");
+  t.push(isPrivate ? "private" : "public");
   return t;
 }
 
