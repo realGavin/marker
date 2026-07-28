@@ -12,17 +12,19 @@ export interface Pin {
   region: string;
   /** Filter tags emitted by the ETL; keys match skin.pinFilters. */
   tags: string[];
+  city: string | null;
 }
 
-type Tuple = [string, string, number, number, string, string[]?];
+type Tuple = [string, string, number, number, string, string[]?, (string | null)?];
 
-export const pins: Pin[] = (raw as Tuple[]).map(([slug, name, lat, lng, region, tags]) => ({
+export const pins: Pin[] = (raw as Tuple[]).map(([slug, name, lat, lng, region, tags, city]) => ({
   slug,
   name,
   lat,
   lng,
   region,
   tags: tags ?? [],
+  city: city ?? null,
 }));
 
 export function toGeoJSON(rows: Pin[]) {
@@ -41,19 +43,25 @@ export const pinsGeoJSON = toGeoJSON(pins);
 
 const norm = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9 ]/g, "");
 
-/** Simple in-memory prefix/substring search over 12k names — instant, offline. */
+/**
+ * In-memory search over 12k places — instant, offline. Matches the place name
+ * first, then the city ("Monterey" surfaces that town's places even when no
+ * name contains it), so people can search the way they think: by destination.
+ */
 export function searchPins(query: string, limit = 20): Pin[] {
   const q = norm(query).trim();
   if (q.length < 2) return [];
-  const starts: Pin[] = [];
-  const contains: Pin[] = [];
+  const nameStarts: Pin[] = [];
+  const nameContains: Pin[] = [];
+  const cityMatches: Pin[] = [];
   for (const p of pins) {
     const n = norm(p.name);
-    if (n.startsWith(q)) starts.push(p);
-    else if (n.includes(q)) contains.push(p);
-    if (starts.length >= limit) break;
+    if (n.startsWith(q)) nameStarts.push(p);
+    else if (n.includes(q)) nameContains.push(p);
+    else if (p.city && norm(p.city).startsWith(q)) cityMatches.push(p);
+    if (nameStarts.length >= limit) break;
   }
-  return [...starts, ...contains].slice(0, limit);
+  return [...nameStarts, ...nameContains, ...cityMatches].slice(0, limit);
 }
 
 export function nearest(lat: number, lng: number, limit = 25): Pin[] {

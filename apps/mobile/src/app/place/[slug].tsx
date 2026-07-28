@@ -48,6 +48,7 @@ export default function PlaceScreen() {
   const myLog = logs?.find((l) => l.place.slug === slug);
   const [note, setNote] = useState("");
   const [rating, setRating] = useState<number | null>(null);
+  const [noteSaved, setNoteSaved] = useState(false);
 
   useEffect(() => {
     setNote(myLog?.note ?? "");
@@ -142,9 +143,16 @@ export default function PlaceScreen() {
             <Pressable
               style={styles.listRow}
               onPress={() => {
-                Alert.prompt("New list", "Name your list", (title) => {
-                  if (title?.trim()) {
-                    createList.mutate(title.trim());
+                Alert.prompt("New list", "Name your list", async (title) => {
+                  if (!title?.trim()) return;
+                  // create AND add this place in one step — no dead-end picker reopen
+                  try {
+                    const listId = await createList.mutateAsync(title.trim());
+                    addToList.mutate({ listId, placeId: place.id });
+                    setListPickerOpen(false);
+                    Haptics.selectionAsync().catch(() => {});
+                  } catch {
+                    Alert.alert("Couldn't create list", "Please try again.");
                   }
                 });
               }}
@@ -176,9 +184,24 @@ export default function PlaceScreen() {
               placeholderTextColor={colors.textSecondary}
               value={note}
               onChangeText={setNote}
-              onEndEditing={() => upsert.mutate({ placeId: place.id, status: "visited", rating, note: note || null })}
+              onEndEditing={() =>
+                upsert.mutate(
+                  { placeId: place.id, status: "visited", rating, note: note || null },
+                  {
+                    onSuccess: () => {
+                      setNoteSaved(true);
+                      setTimeout(() => setNoteSaved(false), 2000);
+                    },
+                  },
+                )
+              }
               multiline
             />
+            {noteSaved && (
+              <Text style={[type.caption, { color: colors.primary, marginTop: spacing.xs }]}>
+                Saved ✓
+              </Text>
+            )}
           </View>
         )}
 

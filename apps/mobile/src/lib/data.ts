@@ -288,8 +288,13 @@ export function useCreateList() {
   return useMutation({
     mutationFn: async (title: string) => {
       if (!session) throw new Error("not signed in");
-      const { error } = await sb().from("lists").insert({ owner_id: session.user.id, title, niche_id: skin.nicheId });
+      const { data, error } = await sb()
+        .from("lists")
+        .insert({ owner_id: session.user.id, title, niche_id: skin.nicheId })
+        .select("id")
+        .single();
       if (error) throw error;
+      return data.id as string;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["lists"] }),
   });

@@ -15,7 +15,7 @@ import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
 import { buildMapStyle } from "../../lib/map-style";
 import { pins, pinsGeoJSON, searchPins, toGeoJSON, type Pin } from "../../lib/pins";
-import { useMyLogs, useProfile, useUpsertLog, usePlace } from "../../lib/data";
+import { useMyLogs, useProfile, useUpsertLog, useDeleteLog, usePlace } from "../../lib/data";
 import { PlacePhoto } from "../../ui/PlacePhoto";
 
 const US_CENTER: [number, number] = [-98.5, 39.8];
@@ -206,7 +206,7 @@ export default function MapScreen() {
             renderItem={({ item }) => (
               <Pressable style={styles.resultRow} onPress={() => pickResult(item)}>
                 <Text style={type.body} numberOfLines={1}>{item.name}</Text>
-                <Text style={type.caption}>{item.region}</Text>
+                <Text style={type.caption}>{[item.city, item.region].filter(Boolean).join(", ")}</Text>
               </Pressable>
             )}
           />
@@ -228,7 +228,16 @@ function PreviewCard({ pin, onClose }: { pin: Pin; onClose: () => void }) {
   const { data: logs } = useMyLogs();
   const { data: place } = usePlace(pin.slug);
   const upsert = useUpsertLog();
+  const remove = useDeleteLog();
   const myLog = logs?.find((l) => l.place.slug === pin.slug);
+  const busy = !place || upsert.isPending || remove.isPending;
+
+  // bookmark toggle: want -> clear, otherwise mark want (overwrites nothing rated)
+  const toggleWant = () => {
+    if (!place) return;
+    if (myLog?.status === "want") remove.mutate(place.id);
+    else upsert.mutate({ placeId: place.id, status: "want" });
+  };
 
   return (
     <View style={styles.preview}>
@@ -247,7 +256,7 @@ function PreviewCard({ pin, onClose }: { pin: Pin; onClose: () => void }) {
       <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
         <Pressable
           style={[styles.previewButton, myLog?.status === "visited" && styles.previewButtonActive]}
-          disabled={!place || upsert.isPending}
+          disabled={busy}
           onPress={() => place && upsert.mutate({ placeId: place.id, status: "visited" })}
         >
           <Ionicons
@@ -258,6 +267,18 @@ function PreviewCard({ pin, onClose }: { pin: Pin; onClose: () => void }) {
           <Text style={[styles.previewButtonText, myLog?.status === "visited" && { color: "#FFF" }]}>
             {skin.vocab.visited}
           </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.previewWant, myLog?.status === "want" && styles.previewWantActive]}
+          disabled={busy}
+          onPress={toggleWant}
+          hitSlop={4}
+        >
+          <Ionicons
+            name={myLog?.status === "want" ? "bookmark" : "bookmark-outline"}
+            size={18}
+            color={myLog?.status === "want" ? "#FFF" : colors.accent}
+          />
         </Pressable>
         <Pressable
           style={styles.previewButton}
@@ -344,6 +365,17 @@ const styles = StyleSheet.create({
   },
   previewButtonActive: { backgroundColor: colors.primary },
   previewButtonText: { fontSize: 14, fontWeight: "700", color: colors.primary },
+  previewWant: {
+    width: 46,
+    height: 42,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+  },
+  previewWantActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   nearMe: {
     position: "absolute",
     right: spacing.md,

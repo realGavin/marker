@@ -80,7 +80,9 @@ export default function SignIn() {
 function SignInForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"signIn" | "signUp">("signIn");
+  const [mode, setMode] = useState<"signIn" | "signUp" | "reset">("signIn");
+  const [resetCode, setResetCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [appleAvailable, setAppleAvailable] = useState(false);
 
@@ -104,11 +106,52 @@ function SignInForm() {
     if (!supabase) return;
     setBusy(true);
     try {
-      const { error } =
-        mode === "signIn"
-          ? await supabase.auth.signInWithPassword({ email, password })
-          : await supabase.auth.signUp({ email, password });
-      if (error) Alert.alert("Sign in failed", error.message);
+      if (mode === "signIn") {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) Alert.alert("Sign in failed", error.message);
+      } else {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        if (error) Alert.alert("Sign up failed", error.message);
+        else if (!data.session) {
+          Alert.alert("Almost there", "We sent a confirmation link to your email. Tap it, then sign in here.");
+          setMode("signIn");
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendResetCode = async () => {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    setBusy(true);
+    try {
+      await supabase.auth.resetPasswordForEmail(email.trim());
+      // always advance — don't reveal whether the email has an account
+      setCodeSent(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitReset = async () => {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        email: email.trim(),
+        token: resetCode.trim(),
+        type: "recovery",
+      });
+      if (error) {
+        Alert.alert("Code didn't work", "Check the 6-digit code from the email and try again.");
+        return;
+      }
+      const { error: pwError } = await supabase.auth.updateUser({ password });
+      if (pwError) Alert.alert("Couldn't set password", pwError.message);
+      // success: a session now exists, so the app navigates in automatically
     } finally {
       setBusy(false);
     }
@@ -166,28 +209,82 @@ function SignInForm() {
         value={email}
         onChangeText={setEmail}
       />
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        placeholderTextColor={colors.textSecondary}
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-      />
-      <Pressable
-        style={[styles.button, busy && { opacity: 0.6 }]}
-        disabled={busy || !email || password.length < 8}
-        onPress={submitEmail}
-      >
-        <Text style={styles.buttonText}>
-          {mode === "signIn" ? "Sign in" : "Create account"}
-        </Text>
-      </Pressable>
-      <Pressable onPress={() => setMode(mode === "signIn" ? "signUp" : "signIn")}>
-        <Text style={[type.caption, { marginTop: spacing.md }]}>
-          {mode === "signIn" ? "New here? Create an account" : "Have an account? Sign in"}
-        </Text>
-      </Pressable>
+
+      {mode === "reset" ? (
+        <>
+          {codeSent && (
+            <>
+              <Text style={[type.caption, { alignSelf: "flex-start", marginBottom: spacing.xs }]}>
+                If that email has an account, a 6-digit code is on its way.
+              </Text>
+              <TextInput
+                style={styles.input}
+                placeholder="6-digit code"
+                placeholderTextColor={colors.textSecondary}
+                keyboardType="number-pad"
+                value={resetCode}
+                onChangeText={setResetCode}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="New password (8+ characters)"
+                placeholderTextColor={colors.textSecondary}
+                secureTextEntry
+                value={password}
+                onChangeText={setPassword}
+              />
+            </>
+          )}
+          <Pressable
+            style={[styles.button, busy && { opacity: 0.6 }]}
+            disabled={busy || !email || (codeSent && (resetCode.length < 6 || password.length < 8))}
+            onPress={codeSent ? submitReset : sendResetCode}
+          >
+            <Text style={styles.buttonText}>
+              {codeSent ? "Set new password" : "Email me a reset code"}
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              setMode("signIn");
+              setCodeSent(false);
+              setResetCode("");
+            }}
+          >
+            <Text style={[type.caption, { marginTop: spacing.md }]}>Back to sign in</Text>
+          </Pressable>
+        </>
+      ) : (
+        <>
+          <TextInput
+            style={styles.input}
+            placeholder="Password"
+            placeholderTextColor={colors.textSecondary}
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+          />
+          <Pressable
+            style={[styles.button, busy && { opacity: 0.6 }]}
+            disabled={busy || !email || password.length < 8}
+            onPress={submitEmail}
+          >
+            <Text style={styles.buttonText}>
+              {mode === "signIn" ? "Sign in" : "Create account"}
+            </Text>
+          </Pressable>
+          {mode === "signIn" && (
+            <Pressable onPress={() => setMode("reset")}>
+              <Text style={[type.caption, { marginTop: spacing.md }]}>Forgot password?</Text>
+            </Pressable>
+          )}
+          <Pressable onPress={() => setMode(mode === "signIn" ? "signUp" : "signIn")}>
+            <Text style={[type.caption, { marginTop: spacing.md }]}>
+              {mode === "signIn" ? "New here? Create an account" : "Have an account? Sign in"}
+            </Text>
+          </Pressable>
+        </>
+      )}
     </KeyboardAvoidingView>
   );
 }

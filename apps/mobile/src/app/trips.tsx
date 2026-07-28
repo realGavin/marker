@@ -15,9 +15,11 @@ import type { TripTemplate } from "@marker/core";
 import { skin } from "../skin";
 import { colors, spacing, type } from "../ui/theme";
 import {
+  useMyLogs,
   usePlanTrip,
   useTemplatePlaces,
   useTripPlans,
+  useUpsertLog,
   type TripItinerary,
 } from "../lib/data";
 
@@ -201,6 +203,23 @@ function shareTrip(itinerary: TripItinerary, title?: string) {
 
 function Itinerary({ itinerary, title }: { itinerary: TripItinerary; title?: string }) {
   const router = useRouter();
+  const { data: logs } = useMyLogs();
+  const upsert = useUpsertLog();
+  const [savedAll, setSavedAll] = useState(false);
+
+  // itinerary stops carry slugs; resolve ids so the unlogged ones can be saved
+  const stopSlugs = itinerary.days.flatMap((d) => d.places.map((p) => p.slug));
+  const { data: stopPlaces } = useTemplatePlaces(stopSlugs);
+  const loggedSlugs = new Set((logs ?? []).map((l) => l.place.slug));
+  const unlogged = (stopPlaces ?? []).filter((p) => !loggedSlugs.has(p.slug));
+
+  const saveAll = async () => {
+    for (const p of unlogged) {
+      await upsert.mutateAsync({ placeId: p.id, status: "want" }).catch(() => {});
+    }
+    setSavedAll(true);
+  };
+
   return (
     <View style={styles.resultCard}>
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm }}>
@@ -229,6 +248,20 @@ function Itinerary({ itinerary, title }: { itinerary: TripItinerary; title?: str
           {d.note ? <Text style={[type.caption, { marginTop: 4 }]}>{d.note}</Text> : null}
         </View>
       ))}
+      {(unlogged.length > 0 || savedAll) && (
+        <Pressable
+          style={[styles.saveAll, (savedAll || upsert.isPending) && { opacity: 0.7 }]}
+          disabled={savedAll || upsert.isPending}
+          onPress={saveAll}
+        >
+          <Ionicons name={savedAll ? "checkmark-circle" : "bookmark-outline"} size={16} color="#FFF" />
+          <Text style={styles.saveAllText}>
+            {savedAll
+              ? "Saved — they're on your map now"
+              : `Add all ${unlogged.length} to ${skin.vocab.wantTo.toLowerCase()}`}
+          </Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -323,6 +356,17 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginTop: spacing.md,
   },
+  saveAll: {
+    flexDirection: "row",
+    gap: spacing.xs,
+    height: 42,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.accent,
+    marginTop: spacing.md,
+  },
+  saveAllText: { color: "#FFF", fontSize: 14, fontWeight: "700" },
   templateCard: {
     backgroundColor: colors.surface,
     borderRadius: 12,

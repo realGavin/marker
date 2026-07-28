@@ -30,11 +30,11 @@ function tags(r: PlaceRow): string[] {
 
 /**
  * Emit the compact pin dataset the map renders from.
- * Format: array of [slug, name, lat, lng, region, tags] tuples (~1.3 MB for 12.6k).
+ * Format: [slug, name, lat, lng, region, tags, city] tuples (~1.4 MB for 12.6k).
  */
 export async function pins(): Promise<void> {
   const rows: PlaceRow[] = JSON.parse(await readFile(DATA + "places.json", "utf8"));
-  const tuples = rows.map((r) => [r.slug, r.name, r.lat, r.lng, r.region, tags(r)]);
+  const tuples = rows.map((r) => [r.slug, r.name, r.lat, r.lng, r.region, tags(r), r.city]);
   await mkdir(APP_ASSET, { recursive: true });
   const json = JSON.stringify(tuples);
   await writeFile(APP_ASSET + "pins.json", json);
