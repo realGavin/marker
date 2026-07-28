@@ -355,3 +355,55 @@ export function useAddToList() {
     },
   });
 }
+
+/** A scheduled upcoming visit; the skin names these (see vocab.visitTime). */
+export interface VisitTime {
+  id: string;
+  at: string;
+  place: { id: string; name: string; slug: string };
+}
+
+export function useVisitTimes() {
+  const { session } = useAuth();
+  return useQuery({
+    queryKey: ["visit-times"],
+    enabled: !!session,
+    queryFn: async (): Promise<VisitTime[]> => {
+      const { data, error } = await sb()
+        .from("visit_times")
+        .select("id, at, place:places(id, name, slug)")
+        .order("at", { ascending: true });
+      if (error) throw error;
+      return (data as unknown as VisitTime[]) ?? [];
+    },
+  });
+}
+
+export function useAddVisitTime() {
+  const qc = useQueryClient();
+  const { session } = useAuth();
+  return useMutation({
+    mutationFn: async (input: { placeId: string; at: Date }) => {
+      if (!session) throw new Error("not signed in");
+      const { data, error } = await sb()
+        .from("visit_times")
+        .insert({ user_id: session.user.id, place_id: input.placeId, at: input.at.toISOString() })
+        .select("id")
+        .single();
+      if (error) throw error;
+      return data.id as string;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visit-times"] }),
+  });
+}
+
+export function useDeleteVisitTime() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await sb().from("visit_times").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visit-times"] }),
+  });
+}

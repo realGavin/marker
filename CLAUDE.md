@@ -27,6 +27,8 @@
 - Expo's `run:ios` demands a signing certificate even for simulator builds (Sign-in-with-Apple capability); use `xcodebuild ... CODE_SIGNING_ALLOWED=NO` + `simctl install/launch` instead.
 - Deleting `ios/build` also deletes ReactCodegen outputs; re-run `pod install` after purging it.
 - `pod install` / `expo run:ios` deadlock inside the Claude Code shell sandbox (CocoaPods' Node helper subprocess gets blocked; ruby hangs on a pipe read at "Installing CocoaPods"). Run iOS native build commands with the sandbox disabled.
+- `pod install` crashes with `Encoding::CompatibilityError` when the shell has no UTF-8 locale: always run it with `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`. And never chain `pod install 2>&1 | tail && xcodebuild` — the pipe eats pod's exit code, so a failed install "succeeds" into a stale build.
+- After JS edits, a plain app relaunch often serves a stale Metro bundle; restart Metro with `expo start --clear` before demoing changes.
 - Homebrew pnpm requires Node 22+; this machine uses Node 20 + corepack-pinned pnpm 10 (`packageManager` field).
 - Always run `expo`/`pod` non-interactively in background shells (`CI=1`), and `cd` explicitly in every background command — background shells start fresh.
 

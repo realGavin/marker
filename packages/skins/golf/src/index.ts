@@ -27,6 +27,9 @@ export const golfSkin: Skin = {
     wantTo: "Want to play",
     myPlaces: "My courses",
     planTrip: "Plan a golf trip",
+    visitTime: "Tee time",
+    visitTimes: "Tee times",
+    setVisitTime: "Set a tee time",
     appName: "Marker Golf",
   },
   theme: {

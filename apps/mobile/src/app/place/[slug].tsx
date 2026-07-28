@@ -26,7 +26,10 @@ import {
   useCreateList,
 } from "../../lib/data";
 import { useRouter } from "expo-router";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { PlacePhoto } from "../../ui/PlacePhoto";
+import { scheduleVisitReminders, cancelVisitReminders } from "../../lib/reminders";
+import { useVisitTimes, useAddVisitTime, useDeleteVisitTime } from "../../lib/data";
 
 /** Rating stored as 0–20 (half steps); shown as 0–10. */
 const shownRating = (r: number) => (r / 2).toFixed(r % 2 ? 1 : 0);
@@ -44,6 +47,15 @@ export default function PlaceScreen() {
   const createList = useCreateList();
   const [listPickerOpen, setListPickerOpen] = useState(false);
   const myLists = (allLists ?? []).filter((l) => l.owner_id !== null);
+  const { data: visitTimes } = useVisitTimes();
+  const addVisitTime = useAddVisitTime();
+  const deleteVisitTime = useDeleteVisitTime();
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
+  const [draftTime, setDraftTime] = useState<Date>(() => {
+    const d = new Date(Date.now() + 24 * 3600_000);
+    d.setMinutes(0, 0, 0);
+    return d;
+  });
 
   const myLog = logs?.find((l) => l.place.slug === slug);
   const [note, setNote] = useState("");
@@ -75,6 +87,26 @@ export default function PlaceScreen() {
   const website = (place.attrs as { website?: string } | null)?.website;
   const location = [place.city, place.region].filter(Boolean).join(", ");
   const status = myLog?.status;
+  const myVisitTimes = (visitTimes ?? []).filter(
+    (v) => v.place.id === place.id && new Date(v.at).getTime() > Date.now(),
+  );
+
+  const confirmVisitTime = async () => {
+    try {
+      const id = await addVisitTime.mutateAsync({ placeId: place.id, at: draftTime });
+      setTimePickerOpen(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      const granted = await scheduleVisitReminders(id, place.name, draftTime);
+      if (!granted) {
+        Alert.alert(
+          "Reminders off",
+          `Saved, but notifications are disabled — enable them in Settings to get reminded 24h and 4h before your ${skin.vocab.visitTime.toLowerCase()}.`,
+        );
+      }
+    } catch {
+      Alert.alert("Couldn't save", "Please try again.");
+    }
+  };
 
   const setStatus = (next: "visited" | "want") => {
     if (status === next) {
@@ -160,6 +192,61 @@ export default function PlaceScreen() {
               <Ionicons name="add" size={16} color={colors.accent} />
               <Text style={[type.body, { color: colors.accent }]}>New list…</Text>
             </Pressable>
+          </View>
+        )}
+
+        <Pressable style={styles.addToList} onPress={() => setTimePickerOpen(!timePickerOpen)}>
+          <Ionicons name="alarm-outline" size={18} color={colors.primary} />
+          <Text style={styles.addToListText}>{skin.vocab.setVisitTime}</Text>
+          <Ionicons name={timePickerOpen ? "chevron-up" : "chevron-down"} size={15} color={colors.textSecondary} />
+        </Pressable>
+        {timePickerOpen && (
+          <View style={styles.card}>
+            <DateTimePicker
+              value={draftTime}
+              mode="datetime"
+              display="spinner"
+              minimumDate={new Date()}
+              minuteInterval={10}
+              onChange={(_e, d) => d && setDraftTime(d)}
+            />
+            <Pressable
+              style={[styles.button, addVisitTime.isPending && { opacity: 0.6 }]}
+              disabled={addVisitTime.isPending}
+              onPress={confirmVisitTime}
+            >
+              <Text style={styles.buttonText}>
+                Remind me 24h & 4h before
+              </Text>
+            </Pressable>
+          </View>
+        )}
+        {myVisitTimes.length > 0 && (
+          <View style={styles.card}>
+            <Text style={type.heading}>{skin.vocab.visitTimes}</Text>
+            {myVisitTimes.map((v) => (
+              <View key={v.id} style={styles.factRow}>
+                <Ionicons name="alarm" size={16} color={colors.accent} />
+                <Text style={[type.body, { flex: 1, marginLeft: spacing.sm }]}>
+                  {new Date(v.at).toLocaleString([], {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </Text>
+                <Pressable
+                  hitSlop={8}
+                  onPress={() => {
+                    deleteVisitTime.mutate(v.id);
+                    cancelVisitReminders(v.id).catch(() => {});
+                  }}
+                >
+                  <Ionicons name="close-circle-outline" size={19} color={colors.textSecondary} />
+                </Pressable>
+              </View>
+            ))}
           </View>
         )}
 

@@ -15,13 +15,16 @@ import type { TripTemplate } from "@marker/core";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
 import {
+  useDeleteVisitTime,
   useMyLogs,
   usePlanTrip,
   useTemplatePlaces,
   useTripPlans,
   useUpsertLog,
+  useVisitTimes,
   type TripItinerary,
 } from "../../lib/data";
+import { cancelVisitReminders } from "../../lib/reminders";
 
 const BUDGETS = ["any", "$", "$$", "$$$"] as const;
 
@@ -45,6 +48,9 @@ export default function TripsScreen() {
   const router = useRouter();
   const { data: savedPlans } = useTripPlans();
   const planTrip = usePlanTrip();
+  const { data: visitTimes } = useVisitTimes();
+  const deleteVisitTime = useDeleteVisitTime();
+  const upcoming = (visitTimes ?? []).filter((v) => new Date(v.at).getTime() > Date.now());
 
   const [region, setRegion] = useState("");
   const [days, setDays] = useState("3");
@@ -87,6 +93,38 @@ export default function TripsScreen() {
         <Text style={[type.caption, { marginTop: spacing.xs, marginBottom: spacing.md }]}>
           Real {skin.vocab.places} from our directory — never invented.
         </Text>
+
+        {upcoming.length > 0 && (
+          <View style={[styles.templateCard, { marginBottom: spacing.md }]}>
+            <Text style={type.heading}>Upcoming {skin.vocab.visitTimes.toLowerCase()}</Text>
+            {upcoming.map((v) => (
+              <View key={v.id} style={styles.placeRow}>
+                <Ionicons name="alarm" size={15} color={colors.accent} />
+                <Pressable style={{ flex: 1 }} onPress={() => router.push(`/place/${v.place.slug}`)}>
+                  <Text style={type.body} numberOfLines={1}>{v.place.name}</Text>
+                  <Text style={type.caption}>
+                    {new Date(v.at).toLocaleString([], {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  hitSlop={8}
+                  onPress={() => {
+                    deleteVisitTime.mutate(v.id);
+                    cancelVisitReminders(v.id).catch(() => {});
+                  }}
+                >
+                  <Ionicons name="close-circle-outline" size={18} color={colors.textSecondary} />
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
 
         <View style={styles.form}>
           <TextInput

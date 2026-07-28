@@ -26,6 +26,12 @@ export interface SkinVocabulary {
   myPlaces: string;
   /** trip planner CTA, e.g. "Plan a hiking trip" */
   planTrip: string;
+  /** a scheduled visit slot, e.g. "Trailhead time" */
+  visitTime: string;
+  /** plural of visitTime */
+  visitTimes: string;
+  /** CTA to schedule one, e.g. "Set a start time" */
+  setVisitTime: string;
   /** App display name for this niche, e.g. "Marker Trails" */
   appName: string;
 }

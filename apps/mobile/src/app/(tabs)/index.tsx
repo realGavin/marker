@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import {
   Camera,
   GeoJSONSource,
@@ -44,7 +44,8 @@ export default function MapScreen() {
   const { data: logs } = useMyLogs();
   // multi-select filters: OR within a group, AND across groups
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [menuOpen, setMenuOpen] = useState(false);
+  // one dropdown per filter group; only one open at a time
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
   // distance ring is radio-style: one radius at a time, anchored on the user
   const [radiusMi, setRadiusMi] = useState<number | null>(null);
   const [userLoc, setUserLoc] = useState<[number, number] | null>(null);
@@ -56,7 +57,7 @@ export default function MapScreen() {
     }
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") return;
-    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
     setUserLoc([loc.coords.latitude, loc.coords.longitude]);
     setRadiusMi(mi);
     camera.current?.flyTo({ center: [loc.coords.longitude, loc.coords.latitude], zoom: mi >= 100 ? 7 : mi >= 50 ? 8 : 9, duration: 800 });
@@ -101,9 +102,11 @@ export default function MapScreen() {
 
   const activeCount = selected.size + (radiusMi ? 1 : 0);
 
-  // "Your log" is an engine-level group; skin groups follow it
-  const menuSections: Array<{ label: string; options: Array<{ key: string; label: string }> }> = [
+  // "Your log" is an engine-level group; skin groups follow; Distance renders
+  // separately (radio semantics + location fetch)
+  const filterGroups: Array<{ key: string; label: string; options: Array<{ key: string; label: string }> }> = [
     {
+      key: "status",
       label: "Your log",
       options: [
         { key: "visited", label: skin.vocab.visited },
@@ -111,10 +114,15 @@ export default function MapScreen() {
       ],
     },
     ...skin.pinFilterGroups.map((g) => ({
+      key: g.key,
       label: g.label,
       options: skin.pinFilters.filter((f) => f.group === g.key),
     })),
   ];
+
+  const groupCount = (g: (typeof filterGroups)[number]) =>
+    g.options.filter((o) => selected.has(o.key)).length;
+  const openedGroup = filterGroups.find((g) => g.key === openGroup);
 
   // color pins by the user's log status
   const pinColor = useMemo(() => {
@@ -231,23 +239,48 @@ export default function MapScreen() {
           )}
         </View>
         {query.length === 0 && (
-          <View style={{ flexDirection: "row", gap: spacing.xs, marginTop: spacing.xs }}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={{ marginTop: spacing.xs }}
+            contentContainerStyle={{ gap: spacing.xs }}
+          >
+            {filterGroups.map((g) => {
+              const n = groupCount(g);
+              const active = openGroup === g.key || n > 0;
+              return (
+                <Pressable
+                  key={g.key}
+                  style={[styles.chip, active && styles.chipActive]}
+                  onPress={() => setOpenGroup(openGroup === g.key ? null : g.key)}
+                >
+                  <Text style={[styles.chipText, active && { color: "#FFF" }]}>
+                    {g.label}{n > 0 ? ` (${n})` : ""}
+                  </Text>
+                  <Ionicons
+                    name={openGroup === g.key ? "chevron-up" : "chevron-down"}
+                    size={12}
+                    color={active ? "#FFF" : colors.textSecondary}
+                  />
+                </Pressable>
+              );
+            })}
             <Pressable
-              style={[styles.chip, (menuOpen || activeCount > 0) && styles.chipActive]}
-              onPress={() => setMenuOpen(!menuOpen)}
+              style={[styles.chip, (openGroup === "distance" || radiusMi != null) && styles.chipActive]}
+              onPress={() => setOpenGroup(openGroup === "distance" ? null : "distance")}
             >
-              <Ionicons
-                name="funnel"
-                size={13}
-                color={menuOpen || activeCount > 0 ? "#FFF" : colors.textPrimary}
-              />
-              <Text style={[styles.chipText, (menuOpen || activeCount > 0) && { color: "#FFF" }]}>
-                Filters{activeCount > 0 ? ` (${activeCount})` : ""}
+              <Text
+                style={[
+                  styles.chipText,
+                  (openGroup === "distance" || radiusMi != null) && { color: "#FFF" },
+                ]}
+              >
+                {radiusMi ? `Within ${radiusMi} mi` : "Distance"}
               </Text>
               <Ionicons
-                name={menuOpen ? "chevron-up" : "chevron-down"}
-                size={13}
-                color={menuOpen || activeCount > 0 ? "#FFF" : colors.textSecondary}
+                name={openGroup === "distance" ? "chevron-up" : "chevron-down"}
+                size={12}
+                color={openGroup === "distance" || radiusMi != null ? "#FFF" : colors.textSecondary}
               />
             </Pressable>
             {activeCount > 0 && (
@@ -256,34 +289,33 @@ export default function MapScreen() {
                 onPress={() => {
                   setSelected(new Set());
                   setRadiusMi(null);
+                  setOpenGroup(null);
                 }}
               >
                 <Text style={styles.chipText}>Clear</Text>
               </Pressable>
             )}
+          </ScrollView>
+        )}
+        {openedGroup && query.length === 0 && (
+          <View style={styles.filterMenu}>
+            {openedGroup.options.map((o) => {
+              const on = selected.has(o.key);
+              return (
+                <Pressable key={o.key} style={styles.filterRow} onPress={() => toggleFilter(o.key)}>
+                  <Ionicons
+                    name={on ? "checkbox" : "square-outline"}
+                    size={20}
+                    color={on ? colors.primary : colors.textSecondary}
+                  />
+                  <Text style={type.body}>{o.label}</Text>
+                </Pressable>
+              );
+            })}
           </View>
         )}
-        {menuOpen && query.length === 0 && (
+        {openGroup === "distance" && query.length === 0 && (
           <View style={styles.filterMenu}>
-            {menuSections.map((section) => (
-              <View key={section.label}>
-                <Text style={styles.filterHeader}>{section.label}</Text>
-                {section.options.map((o) => {
-                  const on = selected.has(o.key);
-                  return (
-                    <Pressable key={o.key} style={styles.filterRow} onPress={() => toggleFilter(o.key)}>
-                      <Ionicons
-                        name={on ? "checkbox" : "square-outline"}
-                        size={20}
-                        color={on ? colors.primary : colors.textSecondary}
-                      />
-                      <Text style={type.body}>{o.label}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            ))}
-            <Text style={styles.filterHeader}>Distance from me</Text>
             {[25, 50, 100].map((mi) => {
               const on = radiusMi === mi;
               return (
