@@ -1,6 +1,12 @@
 import React from "react";
+import { LogBox } from "react-native";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+
+// Unsigned simulator builds can't touch the keychain, which trips a harmless
+// push-registration read inside expo-notifications (we only use local
+// notifications). Signed builds don't hit this at all.
+LogBox.ignoreLogs([/ExpoPushTokenManager/, /persisted server registration/]);
 import { AuthProvider, useAuth } from "../providers/auth";
 import { PurchasesProvider } from "../providers/purchases";
 import { useProfile } from "../lib/data";

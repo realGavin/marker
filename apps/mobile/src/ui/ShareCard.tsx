@@ -28,7 +28,15 @@ const inBounds = (lat: number, lng: number) =>
 
 const shownRating = (r: number) => (r / 2).toFixed(r % 2 ? 1 : 0);
 
-export function ShareCard({ logs, handle }: { logs: MyLog[]; handle: string | null }) {
+export function ShareCard({
+  logs,
+  handle,
+  badge,
+}: {
+  logs: MyLog[];
+  handle: string | null;
+  badge?: string | null;
+}) {
   const visited = logs.filter((l) => l.status === "visited");
   const visitedSlugs = useMemo(() => new Set(visited.map((l) => l.place.slug)), [logs]);
 
@@ -54,7 +62,14 @@ export function ShareCard({ logs, handle }: { logs: MyLog[]; handle: string | nu
     <View style={styles.card}>
       <View style={styles.header}>
         <Text style={styles.wordmark}>{skin.vocab.appName.toUpperCase()}</Text>
-        {handle ? <Text style={styles.handle}>@{handle}</Text> : null}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          {badge ? (
+            <View style={styles.badgePill}>
+              <Text style={styles.badgeText}>{badge}</Text>
+            </View>
+          ) : null}
+          {handle ? <Text style={styles.handle}>@{handle}</Text> : null}
+        </View>
       </View>
 
       <Svg width={CARD_W} height={MAP_H}>
@@ -124,6 +139,13 @@ const styles = StyleSheet.create({
   },
   wordmark: { color: "#FFFFFF", fontSize: 15, fontWeight: "800", letterSpacing: 3 },
   handle: { color: colors.accent, fontSize: 13, fontWeight: "600" },
+  badgePill: {
+    backgroundColor: colors.accent,
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  badgeText: { color: "#1A1A18", fontSize: 10, fontWeight: "800", letterSpacing: 0.4 },
   statsRow: {
     flexDirection: "row",
     justifyContent: "space-around",

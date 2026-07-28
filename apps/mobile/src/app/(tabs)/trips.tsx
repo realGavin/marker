@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   Share,
@@ -11,20 +12,70 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import type { TripTemplate } from "@marker/core";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
+import { searchPins } from "../../lib/pins";
+import { useAuth } from "../../providers/auth";
 import {
+  fetchPlaceBySlug,
+  useCreateTrip,
+  useDeleteTrip,
   useDeleteVisitTime,
+  useJoinTrip,
   useMyLogs,
   usePlanTrip,
   useTemplatePlaces,
   useTripPlans,
+  useUpdateTrip,
   useUpsertLog,
   useVisitTimes,
   type TripItinerary,
+  type TripPlan,
 } from "../../lib/data";
 import { cancelVisitReminders } from "../../lib/reminders";
+
+/** Labeled +/- numeric control — friendlier than a bare keyboard field. */
+function Stepper({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  min: number;
+  max: number;
+}) {
+  const n = Number(value) || min;
+  const set = (next: number) => onChange(String(Math.min(max, Math.max(min, next))));
+  return (
+    <View style={styles.stepper}>
+      <Text style={type.caption}>{label}</Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+        <Pressable style={styles.stepperButton} onPress={() => set(n - 1)} hitSlop={6}>
+          <Ionicons name="remove" size={18} color={colors.primary} />
+        </Pressable>
+        <Text style={styles.stepperValue}>{n}</Text>
+        <Pressable style={styles.stepperButton} onPress={() => set(n + 1)} hitSlop={6}>
+          <Ionicons name="add" size={18} color={colors.primary} />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+/** Date for a given 1-based trip day, from the trip's start date. */
+function dayDate(startDate: string | null | undefined, day: number): string | null {
+  if (!startDate) return null;
+  const d = new Date(startDate + "T12:00:00");
+  if (Number.isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + (day - 1));
+  return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+}
 
 const BUDGETS = ["any", "$", "$$", "$$$"] as const;
 
@@ -48,6 +99,7 @@ export default function TripsScreen() {
   const router = useRouter();
   const { data: savedPlans } = useTripPlans();
   const planTrip = usePlanTrip();
+  const joinTrip = useJoinTrip();
   const { data: visitTimes } = useVisitTimes();
   const deleteVisitTime = useDeleteVisitTime();
   const upcoming = (visitTimes ?? []).filter((v) => new Date(v.at).getTime() > Date.now());
@@ -135,22 +187,8 @@ export default function TripsScreen() {
             onChangeText={setRegion}
           />
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
-            <TextInput
-              style={[styles.input, { flex: 1 }]}
-              placeholder="Days"
-              placeholderTextColor={colors.textSecondary}
-              keyboardType="number-pad"
-              value={days}
-              onChangeText={setDays}
-            />
-            <TextInput
-              style={[styles.input, { flex: 1 }]}
-              placeholder="Rounds"
-              placeholderTextColor={colors.textSecondary}
-              keyboardType="number-pad"
-              value={rounds}
-              onChangeText={setRounds}
-            />
+            <Stepper label="Days" value={days} onChange={setDays} min={1} max={14} />
+            <Stepper label="Rounds" value={rounds} onChange={setRounds} min={1} max={20} />
           </View>
           <View style={styles.budgetRow}>
             {BUDGETS.map((b) => (
@@ -197,19 +235,42 @@ export default function TripsScreen() {
           Editor-built trips, free for everyone.
         </Text>
         {skin.tripTemplates.map((t) => (
-          <TemplateCard key={t.slug} template={t} />
+          <TemplateCard
+            key={t.slug}
+            template={t}
+            onTune={(tuneRegion, tuneDays) => {
+              setRegion(tuneRegion);
+              setDays(String(tuneDays));
+              setRounds(String(tuneDays));
+            }}
+          />
         ))}
 
-        {savedPlans && savedPlans.length > 0 && (
-          <>
-            <Text style={[type.heading, { marginTop: spacing.xl, marginBottom: spacing.sm }]}>
-              Your saved trips
-            </Text>
-            {savedPlans.map((p) => (
-              <SavedPlan key={p.id} title={p.request.region} itinerary={p.itinerary} />
-            ))}
-          </>
+        <View style={{ flexDirection: "row", alignItems: "center", marginTop: spacing.xl, marginBottom: spacing.sm }}>
+          <Text style={[type.heading, { flex: 1 }]}>Your trips</Text>
+          <Pressable
+            style={styles.joinButton}
+            onPress={() =>
+              Alert.prompt("Join a trip", "Enter the 6-letter invite code", async (code) => {
+                if (!code?.trim()) return;
+                try {
+                  await joinTrip.mutateAsync(code.trim());
+                } catch {
+                  Alert.alert("Couldn't join", "Check the code and try again.");
+                }
+              })
+            }
+          >
+            <Ionicons name="enter-outline" size={15} color={colors.primary} />
+            <Text style={styles.joinButtonText}>Join a trip</Text>
+          </Pressable>
+        </View>
+        {(savedPlans ?? []).length === 0 && (
+          <Text style={type.caption}>Trips you build or join appear here.</Text>
         )}
+        {(savedPlans ?? []).map((p) => (
+          <TripCard key={p.id} plan={p} />
+        ))}
       </ScrollView>
     </>
   );
@@ -231,7 +292,15 @@ function shareTrip(itinerary: TripItinerary, title?: string) {
   Share.share({ message: lines.join("\n") }).catch(() => {});
 }
 
-function Itinerary({ itinerary, title }: { itinerary: TripItinerary; title?: string }) {
+function Itinerary({
+  itinerary,
+  title,
+  startDate,
+}: {
+  itinerary: TripItinerary;
+  title?: string;
+  startDate?: string | null;
+}) {
   const router = useRouter();
   const { data: logs } = useMyLogs();
   const upsert = useUpsertLog();
@@ -260,7 +329,9 @@ function Itinerary({ itinerary, title }: { itinerary: TripItinerary; title?: str
       </View>
       {itinerary.days.map((d) => (
         <View key={d.day} style={{ marginTop: spacing.md }}>
-          <Text style={[type.caption, { fontWeight: "700", color: colors.primary }]}>DAY {d.day}</Text>
+          <Text style={[type.caption, { fontWeight: "700", color: colors.primary }]}>
+            DAY {d.day}{dayDate(startDate, d.day) ? ` · ${dayDate(startDate, d.day)}` : ""}
+          </Text>
           {d.places.map((p) => (
             <Pressable
               key={p.id}
@@ -296,28 +367,284 @@ function Itinerary({ itinerary, title }: { itinerary: TripItinerary; title?: str
   );
 }
 
-function SavedPlan({ title, itinerary }: { title: string; itinerary: TripItinerary }) {
+/** A saved trip: viewable, editable, and shareable with friends by code. */
+function TripCard({ plan }: { plan: TripPlan }) {
+  const { session } = useAuth();
+  const deleteTrip = useDeleteTrip();
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const isOwner = plan.user_id === session?.user.id;
+  const title = plan.title ?? plan.request.region;
+
+  const invite = () => {
+    Alert.alert(
+      "Invite friends to this trip",
+      `Code: ${plan.invite_code}\n\nAnyone with the code can view and edit this trip.`,
+      [
+        {
+          text: "Share code",
+          onPress: () =>
+            Share.share({
+              message: `Help me plan "${title}" in ${skin.vocab.appName}: open the app, go to Trips → Join a trip, and enter code ${plan.invite_code}.`,
+            }).catch(() => {}),
+        },
+        { text: "Done", style: "cancel" },
+      ],
+    );
+  };
+
   return (
     <View style={styles.templateCard}>
       <Pressable style={{ flexDirection: "row", alignItems: "center" }} onPress={() => setOpen(!open)}>
         <View style={{ flex: 1 }}>
-          <Text style={type.heading}>{title}</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+            <Text style={type.heading} numberOfLines={1}>{title}</Text>
+            {!isOwner && (
+              <View style={styles.sharedBadge}>
+                <Text style={styles.sharedBadgeText}>Shared</Text>
+              </View>
+            )}
+          </View>
           <Text style={type.caption}>
-            {itinerary.days.length} days · {itinerary.days.reduce((n, d) => n + d.places.length, 0)} stops
+            {plan.start_date ? `${dayDate(plan.start_date, 1)} · ` : ""}
+            {plan.itinerary.days.length} days · {plan.itinerary.days.reduce((n, d) => n + d.places.length, 0)} stops
           </Text>
         </View>
         <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.textSecondary} />
       </Pressable>
-      {open && <Itinerary itinerary={itinerary} title={title} />}
+      {open && !editing && (
+        <>
+          <View style={styles.tripActions}>
+            <Pressable style={styles.tripAction} onPress={() => setEditing(true)}>
+              <Ionicons name="create-outline" size={16} color={colors.primary} />
+              <Text style={styles.tripActionText}>Edit</Text>
+            </Pressable>
+            <Pressable style={styles.tripAction} onPress={invite}>
+              <Ionicons name="person-add-outline" size={16} color={colors.primary} />
+              <Text style={styles.tripActionText}>Invite</Text>
+            </Pressable>
+            {isOwner && (
+              <Pressable
+                style={styles.tripAction}
+                onPress={() =>
+                  Alert.alert("Delete trip?", `"${title}" will be removed for everyone on it.`, [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Delete", style: "destructive", onPress: () => deleteTrip.mutate(plan.id) },
+                  ])
+                }
+              >
+                <Ionicons name="trash-outline" size={16} color="#B4552D" />
+                <Text style={[styles.tripActionText, { color: "#B4552D" }]}>Delete</Text>
+              </Pressable>
+            )}
+          </View>
+          <Itinerary itinerary={plan.itinerary} title={title} startDate={plan.start_date} />
+        </>
+      )}
+      {open && editing && <TripEditor plan={plan} onDone={() => setEditing(false)} />}
     </View>
   );
 }
 
-function TemplateCard({ template }: { template: TripTemplate }) {
+/** In-place itinerary editor: title, start date, stops and days. */
+function TripEditor({ plan, onDone }: { plan: TripPlan; onDone: () => void }) {
+  const updateTrip = useUpdateTrip();
+  const [title, setTitle] = useState(plan.title ?? plan.request.region);
+  const [startDate, setStartDate] = useState<string | null>(plan.start_date);
+  const [dateOpen, setDateOpen] = useState(false);
+  const [days, setDays] = useState<TripItinerary["days"]>(
+    () => JSON.parse(JSON.stringify(plan.itinerary.days)),
+  );
+  const [addingTo, setAddingTo] = useState<number | null>(null);
+  const [stopQuery, setStopQuery] = useState("");
+
+  const renumber = (list: TripItinerary["days"]) =>
+    list.map((d, i) => ({ ...d, day: i + 1 }));
+
+  const removeStop = (dayIdx: number, placeId: string) =>
+    setDays((prev) =>
+      prev.map((d, i) => (i === dayIdx ? { ...d, places: d.places.filter((p) => p.id !== placeId) } : d)),
+    );
+
+  const addStop = async (dayIdx: number, slug: string) => {
+    try {
+      const place = await fetchPlaceBySlug(slug);
+      setDays((prev) =>
+        prev.map((d, i) =>
+          i === dayIdx && !d.places.some((p) => p.id === place.id)
+            ? { ...d, places: [...d.places, place] }
+            : d,
+        ),
+      );
+      setStopQuery("");
+      setAddingTo(null);
+    } catch {
+      Alert.alert("Couldn't add", "Please try again.");
+    }
+  };
+
+  const save = async () => {
+    try {
+      await updateTrip.mutateAsync({
+        tripId: plan.id,
+        patch: {
+          title: title.trim() || null,
+          start_date: startDate,
+          itinerary: { ...plan.itinerary, days: renumber(days) },
+        },
+      });
+      onDone();
+    } catch {
+      Alert.alert("Couldn't save", "Please try again.");
+    }
+  };
+
+  const results = stopQuery.length >= 2 ? searchPins(stopQuery, 5) : [];
+
+  return (
+    <View style={styles.resultCard}>
+      <TextInput
+        style={styles.input}
+        value={title}
+        onChangeText={setTitle}
+        placeholder="Trip name"
+        placeholderTextColor={colors.textSecondary}
+      />
+      <Pressable style={styles.dateRow} onPress={() => setDateOpen(!dateOpen)}>
+        <Ionicons name="calendar-outline" size={17} color={colors.primary} />
+        <Text style={[type.body, { flex: 1 }]}>
+          {startDate ? `Starts ${dayDate(startDate, 1)}` : "Set a start date"}
+        </Text>
+        {startDate && (
+          <Pressable hitSlop={8} onPress={() => setStartDate(null)}>
+            <Ionicons name="close-circle-outline" size={17} color={colors.textSecondary} />
+          </Pressable>
+        )}
+      </Pressable>
+      {dateOpen && (
+        <DateTimePicker
+          value={startDate ? new Date(startDate + "T12:00:00") : new Date()}
+          mode="date"
+          display="inline"
+          onChange={(_e, d) => {
+            if (d) setStartDate(d.toISOString().slice(0, 10));
+            setDateOpen(false);
+          }}
+        />
+      )}
+
+      {days.map((d, dayIdx) => (
+        <View key={dayIdx} style={{ marginTop: spacing.md }}>
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <Text style={[type.caption, { fontWeight: "700", color: colors.primary, flex: 1 }]}>
+              DAY {dayIdx + 1}{dayDate(startDate, dayIdx + 1) ? ` · ${dayDate(startDate, dayIdx + 1)}` : ""}
+            </Text>
+            {days.length > 1 && (
+              <Pressable hitSlop={8} onPress={() => setDays((prev) => renumber(prev.filter((_x, i) => i !== dayIdx)))}>
+                <Ionicons name="trash-outline" size={15} color={colors.textSecondary} />
+              </Pressable>
+            )}
+          </View>
+          {d.places.map((p) => (
+            <View key={p.id} style={styles.placeRow}>
+              <Ionicons name="flag" size={14} color={colors.accent} />
+              <View style={{ flex: 1 }}>
+                <Text style={type.body} numberOfLines={1}>{p.name}</Text>
+                <Text style={type.caption}>{[p.city, p.region].filter(Boolean).join(", ")}</Text>
+              </View>
+              <Pressable hitSlop={8} onPress={() => removeStop(dayIdx, p.id)}>
+                <Ionicons name="close-circle-outline" size={18} color={colors.textSecondary} />
+              </Pressable>
+            </View>
+          ))}
+          {addingTo === dayIdx ? (
+            <View>
+              <TextInput
+                style={[styles.input, { marginTop: spacing.xs }]}
+                value={stopQuery}
+                onChangeText={setStopQuery}
+                placeholder={`Search ${skin.vocab.places}…`}
+                placeholderTextColor={colors.textSecondary}
+                autoFocus
+              />
+              {results.map((r) => (
+                <Pressable key={r.slug} style={styles.placeRow} onPress={() => addStop(dayIdx, r.slug)}>
+                  <Ionicons name="add" size={15} color={colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={type.body} numberOfLines={1}>{r.name}</Text>
+                    <Text style={type.caption}>{[r.city, r.region].filter(Boolean).join(", ")}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          ) : (
+            <Pressable
+              style={styles.addStop}
+              onPress={() => {
+                setAddingTo(dayIdx);
+                setStopQuery("");
+              }}
+            >
+              <Ionicons name="add" size={15} color={colors.primary} />
+              <Text style={styles.tripActionText}>Add a stop</Text>
+            </Pressable>
+          )}
+        </View>
+      ))}
+
+      <Pressable
+        style={styles.addStop}
+        onPress={() => setDays((prev) => renumber([...prev, { day: prev.length + 1, note: "", places: [] }]))}
+      >
+        <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
+        <Text style={styles.tripActionText}>Add a day</Text>
+      </Pressable>
+
+      <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+        <Pressable style={[styles.generate, { flex: 1, height: 44 }]} onPress={save} disabled={updateTrip.isPending}>
+          <Text style={styles.generateText}>{updateTrip.isPending ? "Saving…" : "Save trip"}</Text>
+        </Pressable>
+        <Pressable style={styles.cancelButton} onPress={onDone}>
+          <Text style={[styles.tripActionText, { fontSize: 15 }]}>Cancel</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function TemplateCard({
+  template,
+  onTune,
+}: {
+  template: TripTemplate;
+  onTune: (region: string, days: number) => void;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const { data: places } = useTemplatePlaces(template.placeSlugs);
+  const createTrip = useCreateTrip();
+  const [adopted, setAdopted] = useState(false);
+
+  // distribute the template's stops evenly across its day count
+  const adopt = async () => {
+    if (!places?.length) return;
+    const perDay = Math.ceil(places.length / template.days);
+    const days = Array.from({ length: template.days }, (_x, i) => ({
+      day: i + 1,
+      note: "",
+      places: places.slice(i * perDay, (i + 1) * perDay),
+    })).filter((d) => d.places.length > 0);
+    try {
+      await createTrip.mutateAsync({
+        title: template.title,
+        itinerary: { summary: template.description, days },
+      });
+      setAdopted(true);
+    } catch {
+      Alert.alert("Couldn't save", "Please try again.");
+    }
+  };
+
   return (
     <View style={styles.templateCard}>
       <Pressable style={{ flexDirection: "row", alignItems: "center" }} onPress={() => setOpen(!open)}>
@@ -327,21 +654,41 @@ function TemplateCard({ template }: { template: TripTemplate }) {
         </View>
         <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.textSecondary} />
       </Pressable>
-      {open &&
-        (places ?? []).map((p) => (
-          <Pressable
-            key={p.id}
-            style={styles.placeRow}
-            onPress={() => router.push(`/place/${p.slug}`)}
-          >
-            <Ionicons name="flag" size={14} color={colors.accent} />
-            <View style={{ flex: 1 }}>
-              <Text style={type.body} numberOfLines={1}>{p.name}</Text>
-              <Text style={type.caption}>{[p.city, p.region].filter(Boolean).join(", ")}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
-          </Pressable>
-        ))}
+      {open && (
+        <>
+          {(places ?? []).map((p) => (
+            <Pressable
+              key={p.id}
+              style={styles.placeRow}
+              onPress={() => router.push(`/place/${p.slug}`)}
+            >
+              <Ionicons name="flag" size={14} color={colors.accent} />
+              <View style={{ flex: 1 }}>
+                <Text style={type.body} numberOfLines={1}>{p.name}</Text>
+                <Text style={type.caption}>{[p.city, p.region].filter(Boolean).join(", ")}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
+            </Pressable>
+          ))}
+          <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+            <Pressable
+              style={[styles.generate, { flex: 1, height: 42 }, (adopted || createTrip.isPending) && { opacity: 0.7 }]}
+              disabled={adopted || createTrip.isPending || !places?.length}
+              onPress={adopt}
+            >
+              <Text style={[styles.generateText, { fontSize: 14 }]}>
+                {adopted ? "Added to your trips ✓" : "Make it my trip"}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={styles.cancelButton}
+              onPress={() => onTune(places?.[0]?.region ?? "", template.days)}
+            >
+              <Text style={[styles.tripActionText, { fontSize: 14 }]}>Tune it</Text>
+            </Pressable>
+          </View>
+        </>
+      )}
     </View>
   );
 }
@@ -411,4 +758,76 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "#EEE9DD",
   },
+  joinButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    borderRadius: 16,
+    paddingHorizontal: spacing.sm,
+    height: 32,
+    backgroundColor: colors.surface,
+  },
+  joinButtonText: { fontSize: 13, fontWeight: "700", color: colors.primary },
+  sharedBadge: {
+    backgroundColor: colors.accent,
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  sharedBadgeText: { fontSize: 10, fontWeight: "800", color: "#FFF", letterSpacing: 0.5 },
+  tripActions: {
+    flexDirection: "row",
+    gap: spacing.lg,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#EEE9DD",
+  },
+  tripAction: { flexDirection: "row", alignItems: "center", gap: 4 },
+  tripActionText: { fontSize: 13, fontWeight: "700", color: colors.primary },
+  dateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  addStop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: spacing.sm,
+  },
+  cancelButton: {
+    paddingHorizontal: spacing.md,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+  },
+  stepper: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#DDD8CC",
+    borderRadius: 10,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.surface,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  stepperButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#E8EFE9",
+  },
+  stepperValue: { fontSize: 16, fontWeight: "700", color: colors.textPrimary, minWidth: 20, textAlign: "center" },
 });

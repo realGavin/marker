@@ -219,6 +219,10 @@ export interface TripItinerary {
 }
 export interface TripPlan {
   id: string;
+  user_id: string;
+  title: string | null;
+  start_date: string | null; // YYYY-MM-DD
+  invite_code: string;
   request: { region: string; days: number; rounds: number };
   itinerary: TripItinerary;
   created_at: string;
@@ -232,12 +236,85 @@ export function useTripPlans() {
     queryFn: async (): Promise<TripPlan[]> => {
       const { data, error } = await sb()
         .from("trip_plans")
-        .select("id,request,itinerary,created_at")
+        .select("id,user_id,title,start_date,invite_code,request,itinerary,created_at")
         .order("created_at", { ascending: false });
       if (error) throw error;
       return (data ?? []) as TripPlan[];
     },
   });
+}
+
+export function useUpdateTrip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      tripId: string;
+      patch: Partial<Pick<TripPlan, "title" | "start_date" | "itinerary">>;
+    }) => {
+      const { error } = await sb().from("trip_plans").update(input.patch).eq("id", input.tripId);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["trips"] }),
+  });
+}
+
+export function useDeleteTrip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (tripId: string) => {
+      const { error } = await sb().from("trip_plans").delete().eq("id", tripId);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["trips"] }),
+  });
+}
+
+/** Create an owned, editable trip (e.g. adopted from a curated template). */
+export function useCreateTrip() {
+  const qc = useQueryClient();
+  const { session } = useAuth();
+  return useMutation({
+    mutationFn: async (input: { title: string; itinerary: TripItinerary }) => {
+      if (!session) throw new Error("not signed in");
+      const { data, error } = await sb()
+        .from("trip_plans")
+        .insert({
+          user_id: session.user.id,
+          title: input.title,
+          request: { region: input.title, days: input.itinerary.days.length, rounds: 0 },
+          itinerary: input.itinerary,
+        })
+        .select("id")
+        .single();
+      if (error) throw error;
+      return data.id as string;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["trips"] }),
+  });
+}
+
+export function useJoinTrip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (code: string) => {
+      const { data, error } = await sb().rpc("join_trip", { code });
+      if (error) throw error;
+      return data as string;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["trips"] }),
+  });
+}
+
+/** Resolve a bundled pin to its full place row (for adding stops to a trip). */
+export async function fetchPlaceBySlug(slug: string) {
+  const { data, error } = await sb()
+    .from("places")
+    .select("id,slug,name,city,region")
+    .eq("niche_id", skin.nicheId)
+    .eq("slug", slug)
+    .single();
+  if (error) throw error;
+  return data as { id: string; slug: string; name: string; city: string | null; region: string | null };
 }
 
 /** Error codes surfaced by the plan-trip function for UI branching. */
@@ -405,5 +482,22 @@ export function useDeleteVisitTime() {
       if (error) throw error;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["visit-times"] }),
+  });
+}
+
+/** The caller's collector rank among all users (see my_rank in the DB). */
+export function useMyRank() {
+  const { session } = useAuth();
+  return useQuery({
+    queryKey: ["my-rank", session?.user.id],
+    enabled: !!session,
+    retry: false,
+    staleTime: 3600_000,
+    queryFn: async (): Promise<{ visited_count: number; top_percent: number } | null> => {
+      const { data, error } = await sb().rpc("my_rank");
+      if (error) return null; // migration not applied yet -> no badge, no crash
+      const row = Array.isArray(data) ? data[0] : data;
+      return (row as { visited_count: number; top_percent: number }) ?? null;
+    },
   });
 }

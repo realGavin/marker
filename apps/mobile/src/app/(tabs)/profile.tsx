@@ -7,7 +7,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
 import { useAuth } from "../../providers/auth";
 import { usePurchases } from "../../providers/purchases";
-import { useMyLogs, useProfile } from "../../lib/data";
+import { useMyLogs, useMyRank, useProfile } from "../../lib/data";
 import { ShareCard } from "../../ui/ShareCard";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
@@ -22,6 +22,9 @@ export default function ProfileScreen() {
   const [sharing, setSharing] = useState(false);
 
   const handle = profile?.handle ?? session?.user.email?.split("@")[0] ?? null;
+  const { data: rank } = useMyRank();
+  // only wear a badge once there's a collection behind it
+  const badge = rank && rank.visited_count >= 3 ? `TOP ${rank.top_percent}%` : null;
 
   const share = async () => {
     if (sharing) return;
@@ -42,15 +45,25 @@ export default function ProfileScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl * 2 }}>
-      <Text style={type.heading}>
-        {profile?.display_name ?? (profile?.handle ? `@${profile.handle}` : session?.user.email)}
-      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+        <Text style={[type.heading, { flexShrink: 1 }]} numberOfLines={1}>
+          {profile?.display_name ?? (profile?.handle ? `@${profile.handle}` : session?.user.email)}
+        </Text>
+        {badge && (
+          <View style={styles.rankBadge}>
+            <Ionicons name="medal" size={12} color="#1A1A18" />
+            <Text style={styles.rankBadgeText}>{badge}</Text>
+          </View>
+        )}
+      </View>
       <Text style={[type.caption, { marginBottom: spacing.md }]}>
-        Your {skin.vocab.place} map, ready to share.
+        {badge
+          ? `You're in the top ${rank?.top_percent}% of collectors — keep going.`
+          : `Your ${skin.vocab.place} map, ready to share.`}
       </Text>
 
       <View ref={cardRef} collapsable={false}>
-        <ShareCard logs={logs ?? []} handle={handle} />
+        <ShareCard logs={logs ?? []} handle={handle} badge={badge} />
       </View>
 
       <Pressable style={[styles.shareButton, sharing && { opacity: 0.6 }]} onPress={share} disabled={sharing}>
@@ -167,6 +180,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   shareText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+  rankBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: colors.accent,
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  rankBadgeText: { fontSize: 11, fontWeight: "800", color: "#1A1A18", letterSpacing: 0.4 },
   inviteButton: {
     flexDirection: "row",
     gap: spacing.xs,
