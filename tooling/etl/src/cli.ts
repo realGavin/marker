@@ -28,6 +28,12 @@ switch (cmd) {
   case "scrub":
     await (await import("./scrub.js")).scrub();
     break;
+  case "extract-holes":
+    await (await import("./holes.js")).extractHoles(process.argv.includes("--force"));
+    break;
+  case "enrich-holes":
+    await (await import("./holes.js")).enrichHoles();
+    break;
   case "photos":
     await (await import("./photos.js")).photos();
     break;

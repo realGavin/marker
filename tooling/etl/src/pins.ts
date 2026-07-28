@@ -5,14 +5,26 @@ const DATA = new URL("../data/", import.meta.url).pathname;
 // Bundled into the app: the entire pin directory ships offline, zero fetches.
 const APP_ASSET = new URL("../../../apps/mobile/assets/data/", import.meta.url).pathname;
 
-/** Filter tags matching the golf skin's pinFilters keys. */
+/**
+ * Filter tags matching the golf skin's pinFilters keys. Explicit OSM tags win;
+ * holesEst (counted mapped holes/greens) and name signals fill the gaps.
+ * These drive discovery chips only — displayed facts stay strictly tag-sourced.
+ */
 function tags(r: PlaceRow): string[] {
   const t: string[] = [];
-  if (r.attrs.holes != null) {
-    if (r.attrs.holes >= 18) t.push("18");
-    else if (r.attrs.holes <= 9) t.push("9");
+  const holes = r.attrs.holes ?? r.attrs.holesEst;
+  if (holes != null) {
+    if (holes >= 14) t.push("18");
+    else if (holes >= 4) t.push("9");
   }
-  if (r.attrs.access === "public" || r.attrs.access === "municipal") t.push("public");
+  const name = r.name.toLowerCase();
+  const isPublic =
+    r.attrs.access === "public" ||
+    r.attrs.access === "municipal" ||
+    /\b(municipal|muni|park district|county|city of)\b/.test(name);
+  const isPrivate = r.attrs.access === "private" || /\bcountry club\b/.test(name);
+  if (isPublic) t.push("public");
+  else if (isPrivate) t.push("private");
   return t;
 }
 

@@ -20,6 +20,8 @@ export interface PlaceRow {
   country: string;
   attrs: {
     holes?: number;
+    /** Derived from mapped hole/green ways; filter tags only, never displayed. */
+    holesEst?: number;
     par?: number;
     access?: "public" | "private" | "semi-private" | "municipal" | "resort" | "unknown";
     website?: string;

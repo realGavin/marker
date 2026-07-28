@@ -96,14 +96,25 @@ A fake course is structurally impossible to display: the client renders from dat
 ```
 iPhone (Expo app)
  ├─ MapLibre ──► PMTiles basemap on Cloudflare R2 (static, $~1/mo flat)
- ├─ course pins ◄─ static JSON (CDN-cached), clustered on-device
+ ├─ course pins ◄─ static JSON (bundled), clustered + filtered on-device
+ ├─ course photos ◄─ /photos/{slug}.jpg on the tile worker (NAIP aerial, one-time ETL, R2)
  ├─ Supabase client ──► Auth, places, logs, lists (RLS-guarded)
  ├─ Edge Function "plan-trip" ──► retrieval → Claude Haiku → validation
  └─ RevenueCat SDK ──► App Store billing; webhook ──► entitlements table
 Offline batch (your laptop, occasional): ETL seeding · description generation · embeddings
+                                          · aerial photos · hole/green enrichment
 ```
 
 Steady-state moving parts to maintain: **Supabase + one static file host**. That's the whole ops surface.
+
+**Photos (added M7.6):** every course gets a public-domain USGS NAIP aerial image, fetched once
+by `etl photos`, pushed by `etl photos-upload`, served flat-cost from R2 with immutable caching.
+User-uploaded ground photos remain v1.1 (requires App Store UGC moderation machinery).
+
+**Filter data honesty rule (M7.7):** displayed facts come only from explicit source tags.
+Derived signals — hole counts estimated from mapped hole/green ways (`attrs.holesEst`),
+public/private inferred from name patterns — feed map filter chips only, never page facts.
+The skin declares chips (`pinFilters`); the ETL writes matching tags into the pin dataset.
 
 ---
 

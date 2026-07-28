@@ -79,10 +79,17 @@ export const golfSkin: Skin = {
       body: "Your played courses become a beautiful card worth showing off.",
     },
   ],
-  // OSM hole/access coverage is <1%, so attribute chips would filter to a
-  // handful of pins. Status chips (played/want) come from the engine; add
-  // attribute filters here once the data is enriched.
-  pinFilters: [],
+  // Keys match tags the ETL writes into pins.json: hole counts derived from
+  // mapped hole/green ways, access from explicit tags + name signals.
+  // No "Public" chip: only ~2.5% of courses carry an explicit public signal,
+  // so the chip would hide thousands of actually-public courses. "Private"
+  // coverage (explicit tags + "Country Club" names) matches the real-world
+  // ~25% private share, so that one is honest to ship.
+  pinFilters: [
+    { key: "18", label: "18 holes" },
+    { key: "9", label: "9 holes" },
+    { key: "private", label: "Private" },
+  ],
 };
 
 export default golfSkin;

@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -157,7 +158,7 @@ export default function TripsScreen() {
           {errorText ? <Text style={[type.caption, { color: "#B4552D" }]}>{errorText}</Text> : null}
         </View>
 
-        {result && <Itinerary itinerary={result} />}
+        {result && <Itinerary itinerary={result} title={region.trim() || undefined} />}
 
         <Text style={[type.heading, { marginTop: spacing.xl }]}>Trip ideas</Text>
         <Text style={[type.caption, { marginBottom: spacing.sm }]}>
@@ -182,11 +183,32 @@ export default function TripsScreen() {
   );
 }
 
-function Itinerary({ itinerary }: { itinerary: TripItinerary }) {
+/** Day-by-day plain-text version of a plan for the native share sheet. */
+function shareTrip(itinerary: TripItinerary, title?: string) {
+  const lines: string[] = [];
+  lines.push(title ? `${title} — ${skin.vocab.appName}` : skin.vocab.appName);
+  if (itinerary.summary) lines.push(itinerary.summary);
+  for (const d of itinerary.days) {
+    lines.push("", `Day ${d.day}`);
+    for (const p of d.places) {
+      const where = [p.city, p.region].filter(Boolean).join(", ");
+      lines.push(`• ${p.name}${where ? ` (${where})` : ""}`);
+    }
+    if (d.note) lines.push(d.note);
+  }
+  Share.share({ message: lines.join("\n") }).catch(() => {});
+}
+
+function Itinerary({ itinerary, title }: { itinerary: TripItinerary; title?: string }) {
   const router = useRouter();
   return (
     <View style={styles.resultCard}>
-      <Text style={type.body}>{itinerary.summary}</Text>
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm }}>
+        <Text style={[type.body, { flex: 1 }]}>{itinerary.summary}</Text>
+        <Pressable onPress={() => shareTrip(itinerary, title)} hitSlop={8}>
+          <Ionicons name="share-outline" size={20} color={colors.primary} />
+        </Pressable>
+      </View>
       {itinerary.days.map((d) => (
         <View key={d.day} style={{ marginTop: spacing.md }}>
           <Text style={[type.caption, { fontWeight: "700", color: colors.primary }]}>DAY {d.day}</Text>
@@ -224,7 +246,7 @@ function SavedPlan({ title, itinerary }: { title: string; itinerary: TripItinera
         </View>
         <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.textSecondary} />
       </Pressable>
-      {open && <Itinerary itinerary={itinerary} />}
+      {open && <Itinerary itinerary={itinerary} title={title} />}
     </View>
   );
 }
