@@ -4,6 +4,7 @@
  * most requests never touch R2, keeping cost flat regardless of user count.
  */
 import { PMTiles, ResolvedValueCache, type RangeResponse, type Source } from "pmtiles";
+import { PRIVACY_HTML } from "./privacy";
 
 interface Env {
   BUCKET: R2Bucket;
@@ -47,6 +48,12 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
     const url = new URL(request.url);
+
+    if (url.pathname === "/privacy") {
+      return new Response(PRIVACY_HTML, {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=3600" },
+      });
+    }
 
     const photo = PHOTO_PATH.exec(url.pathname);
     if (photo) {

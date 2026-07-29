@@ -11,7 +11,10 @@
     "ios": {
       "bundleIdentifier": "com.gavinzeng.marker",
       "supportsTablet": false,
-      "usesAppleSignIn": true
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "web": {
       "output": "static",
@@ -39,6 +42,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "4aa46d0f-db70-4273-b70c-973c8c6dc1e1"
+      }
     }
   }
 }

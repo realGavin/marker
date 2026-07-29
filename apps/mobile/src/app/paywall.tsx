@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Purchases, { type PurchasesPackage } from "react-native-purchases";
 import { Stack, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -113,6 +113,19 @@ export default function PaywallScreen() {
         <Pressable onPress={restore} disabled={busy} style={{ marginTop: spacing.lg }}>
           <Text style={[type.caption, { textAlign: "center" }]}>Restore purchase</Text>
         </Pressable>
+
+        <Text style={[type.caption, styles.legalNote]}>
+          Subscriptions renew automatically until cancelled in your App Store settings.
+        </Text>
+        <View style={styles.legalRow}>
+          <Pressable onPress={() => Linking.openURL("https://marker-tiles.shuozeng21.workers.dev/privacy")}>
+            <Text style={styles.legalLink}>Privacy Policy</Text>
+          </Pressable>
+          <Text style={type.caption}>·</Text>
+          <Pressable onPress={() => Linking.openURL("https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")}>
+            <Text style={styles.legalLink}>Terms of Use</Text>
+          </Pressable>
+        </View>
       </ScrollView>
     </>
   );
@@ -137,4 +150,14 @@ const styles = StyleSheet.create({
   saveBadge: { backgroundColor: colors.accent, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   saveBadgeText: { fontSize: 10, fontWeight: "800", color: "#1A1A18", letterSpacing: 0.5 },
   planPrice: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
+  legalNote: { textAlign: "center", marginTop: spacing.lg },
+  legalRow: {
+    flexDirection: "row",
+    gap: spacing.xs,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: spacing.xs,
+    marginBottom: spacing.lg,
+  },
+  legalLink: { fontSize: 12, color: colors.primary, textDecorationLine: "underline" },
 });
