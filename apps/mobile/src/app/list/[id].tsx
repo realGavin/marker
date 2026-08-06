@@ -120,7 +120,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.surface,
-    borderRadius: 12,
+    borderRadius: 4,
     padding: spacing.md,
     marginBottom: spacing.sm,
   },

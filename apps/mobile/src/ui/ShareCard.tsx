@@ -75,14 +75,14 @@ export function ShareCard({
       <Svg width={CARD_W} height={MAP_H}>
         {backgroundDots.map((p) => {
           const { x, y } = project(p.lat, p.lng);
-          return <Circle key={p.slug} cx={x} cy={y} r={0.7} fill="#3E6B58" opacity={0.55} />;
+          return <Circle key={p.slug} cx={x} cy={y} r={0.7} fill="#5A5A5E" opacity={0.8} />;
         })}
         {visitedDots.map((p) => {
           const { x, y } = project(p.lat, p.lng);
           return (
             <React.Fragment key={p.slug}>
-              <Circle cx={x} cy={y} r={5} fill={colors.accent} opacity={0.25} />
-              <Circle cx={x} cy={y} r={2.4} fill={colors.accent} />
+              <Circle cx={x} cy={y} r={5} fill={colors.accentFill} opacity={0.22} />
+              <Circle cx={x} cy={y} r={2.4} fill={colors.accentFill} />
             </React.Fragment>
           );
         })}
@@ -101,7 +101,7 @@ export function ShareCard({
         <View style={styles.topRated}>
           {topRated.map((l) => (
             <View key={l.place_id} style={styles.topRow}>
-              <Ionicons name="star" size={11} color={colors.accent} />
+              <Ionicons name="star" size={11} color={colors.accentFill} />
               <Text style={styles.topName} numberOfLines={1}>
                 {l.place.name}
               </Text>
@@ -126,8 +126,8 @@ function Stat({ value, label }: { value: number; label: string }) {
 const styles = StyleSheet.create({
   card: {
     width: CARD_W + spacing.lg * 2,
-    backgroundColor: colors.primaryDark,
-    borderRadius: 20,
+    backgroundColor: "#141414",
+    borderRadius: 4,
     padding: spacing.lg,
     alignSelf: "center",
   },
@@ -137,27 +137,27 @@ const styles = StyleSheet.create({
     alignItems: "baseline",
     marginBottom: spacing.sm,
   },
-  wordmark: { color: "#FFFFFF", fontSize: 15, fontWeight: "800", letterSpacing: 3 },
-  handle: { color: colors.accent, fontSize: 13, fontWeight: "600" },
+  wordmark: { color: "#FFFFFF", fontSize: 15, fontWeight: "300", letterSpacing: 5 },
+  handle: { color: colors.accentFill, fontSize: 13, fontWeight: "600" },
   badgePill: {
-    backgroundColor: colors.accent,
-    borderRadius: 8,
+    backgroundColor: colors.accentFill,
+    borderRadius: 2,
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
-  badgeText: { color: "#1A1A18", fontSize: 10, fontWeight: "800", letterSpacing: 0.4 },
+  badgeText: { color: "#141414", fontSize: 10, fontWeight: "600", letterSpacing: 1 },
   statsRow: {
     flexDirection: "row",
     justifyContent: "space-around",
     marginTop: spacing.md,
     paddingTop: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#3E6B58",
+    borderTopColor: "#333336",
   },
-  statValue: { color: "#FFFFFF", fontSize: 26, fontWeight: "800" },
-  statLabel: { color: "#9DB8AC", fontSize: 12, marginTop: 2 },
+  statValue: { color: "#FFFFFF", fontSize: 26, fontWeight: "200" },
+  statLabel: { color: "#98989D", fontSize: 9, marginTop: 3, letterSpacing: 1.5, textTransform: "uppercase" },
   topRated: { marginTop: spacing.md, gap: 4 },
   topRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  topName: { color: "#DCE8E1", fontSize: 13, flex: 1 },
+  topName: { color: "#C9C9CD", fontSize: 13, flex: 1 },
   topScore: { color: colors.accent, fontSize: 13, fontWeight: "700" },
 });

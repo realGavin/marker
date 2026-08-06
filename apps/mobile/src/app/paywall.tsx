@@ -136,7 +136,7 @@ const styles = StyleSheet.create({
   close: { position: "absolute", top: spacing.md, right: spacing.md, zIndex: 1 },
   perkRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: spacing.sm },
   planButton: {
-    borderRadius: 12,
+    borderRadius: 4,
     borderWidth: 1.5,
     borderColor: colors.primary,
     padding: spacing.md,
@@ -147,7 +147,7 @@ const styles = StyleSheet.create({
   },
   planPrimary: { backgroundColor: colors.primary },
   planTitle: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
-  saveBadge: { backgroundColor: colors.accent, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  saveBadge: { backgroundColor: colors.accentFill, borderRadius: 2, paddingHorizontal: 6, paddingVertical: 2 },
   saveBadgeText: { fontSize: 10, fontWeight: "800", color: "#1A1A18", letterSpacing: 0.5 },
   planPrice: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
   legalNote: { textAlign: "center", marginTop: spacing.lg },

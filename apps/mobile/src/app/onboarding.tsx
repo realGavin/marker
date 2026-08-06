@@ -202,14 +202,14 @@ export default function OnboardingScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, paddingTop: 80 },
   progress: { flexDirection: "row", gap: 6, justifyContent: "center", marginBottom: spacing.xl },
-  progressDot: { width: 24, height: 4, borderRadius: 2, backgroundColor: "#DDD8CC" },
+  progressDot: { width: 24, height: 4, borderRadius: 2, backgroundColor: "#DADAD6" },
   step: { paddingHorizontal: spacing.lg },
   handleRow: {
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#DDD8CC",
-    borderRadius: 12,
+    borderColor: "#DADAD6",
+    borderRadius: 4,
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.md,
   },
@@ -218,7 +218,7 @@ const styles = StyleSheet.create({
   cta: {
     marginTop: spacing.lg,
     height: 50,
-    borderRadius: 12,
+    borderRadius: 4,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.primary,
@@ -228,9 +228,9 @@ const styles = StyleSheet.create({
   stateChip: {
     width: 60,
     height: 44,
-    borderRadius: 10,
+    borderRadius: 3,
     borderWidth: 1,
-    borderColor: "#DDD8CC",
+    borderColor: "#DADAD6",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.surface,
@@ -239,8 +239,8 @@ const styles = StyleSheet.create({
   stateText: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
   search: {
     borderWidth: 1,
-    borderColor: "#DDD8CC",
-    borderRadius: 10,
+    borderColor: "#DADAD6",
+    borderRadius: 3,
     paddingHorizontal: spacing.md,
     height: 46,
     backgroundColor: colors.surface,
@@ -253,6 +253,6 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#EEE9DD",
+    borderBottomColor: "#E7E7E3",
   },
 });

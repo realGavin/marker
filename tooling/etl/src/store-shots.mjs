@@ -13,12 +13,12 @@ const W = 1290;
 const H = 2796;
 const CAPTION_H = 330;
 const SHOT_W = 1150;
-const RADIUS = 44;
+const RADIUS = 12;
 
-const CREAM = "#FAF7F0";
-const GREEN = "#1B4D3E";
+const CREAM = "#F5F5F3";
+const GREEN = "#141414";
 const GOLD = "#C9A227";
-const MUTED = "#6B6B66";
+const MUTED = "#85858A";
 
 const DIR = new URL("../../../docs/store-screenshots/", import.meta.url).pathname;
 
@@ -39,7 +39,7 @@ function captionSvg(title, sub) {
   return Buffer.from(`<svg width="${W}" height="${CAPTION_H}" xmlns="http://www.w3.org/2000/svg">
   <rect width="${W}" height="${CAPTION_H}" fill="${CREAM}"/>
   <text x="${W / 2}" y="150" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial"
-        font-size="76" font-weight="700" fill="${GREEN}">${esc(title)}</text>
+        font-size="62" font-weight="300" letter-spacing="6" fill="${GREEN}">${esc(title.toUpperCase())}</text>
   <text x="${W / 2}" y="222" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial"
         font-size="40" font-weight="400" fill="${MUTED}">${esc(sub)}</text>
   <rect x="${W / 2 - 40}" y="262" width="80" height="6" rx="3" fill="${GOLD}"/>
@@ -53,9 +53,10 @@ const STATUS_BAR = 175;
 async function compose({ file, title, sub }, index) {
   const shotH = H - CAPTION_H;
   const src = sharp(DIR + file);
-  const { height: srcH = H } = await src.metadata();
+  const { width: srcW = W, height: srcH = H } = await src.metadata();
+  const bar = Math.round(STATUS_BAR * (srcW / W));
   const inner = await sharp(DIR + file)
-    .extract({ left: 0, top: STATUS_BAR, width: W, height: srcH - STATUS_BAR })
+    .extract({ left: 0, top: bar, width: srcW, height: srcH - bar })
     .resize({ width: SHOT_W, height: shotH - 60, fit: "cover", position: "top" })
     .composite([
       {

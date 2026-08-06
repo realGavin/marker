@@ -45,11 +45,34 @@ export interface SkinTheme {
     textPrimary: string;
     textSecondary: string;
     accent: string;
+    /** Saturated accent for fills where text contrast doesn't apply. */
+    accentFill: string;
+    /** 1px border color; this design language uses hairlines, not shadows. */
+    hairline: string;
     visitedPin: string;
     defaultPin: string;
     wantPin: string;
   };
+  /** Shape language: small radii read machined, large read soft. */
+  radii: {
+    card: number;
+    control: number;
+    chip: number;
+    sheet: number;
+  };
+  typography: {
+    /** Large screen/place titles. */
+    display: { fontSize: number; fontWeight: TextWeight; letterSpacing: number; uppercase: boolean };
+    /** Section headings. */
+    heading: { fontSize: number; fontWeight: TextWeight; letterSpacing: number; uppercase: boolean };
+    /** Tiny caps labels under numerals and on chips. */
+    label: { fontSize: number; letterSpacing: number };
+    /** Instrument-cluster numbers. */
+    numeral: { fontSize: number; fontWeight: TextWeight };
+  };
 }
+
+export type TextWeight = "200" | "300" | "400" | "500" | "600" | "700";
 
 /** One welcome-carousel slide shown before sign-in. `icon` is an Ionicons name. */
 export interface IntroSlide {

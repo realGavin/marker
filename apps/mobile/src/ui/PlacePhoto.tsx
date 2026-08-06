@@ -24,7 +24,7 @@ export function PlacePhoto({
       source={{ uri: url }}
       onError={() => setFailed(true)}
       resizeMode="cover"
-      style={[{ width: "100%", height, borderRadius: 12, backgroundColor: "#E4E9E2" }, style]}
+      style={[{ width: "100%", height, borderRadius: 4, backgroundColor: "#E4E9E2" }, style]}
     />
   );
 }

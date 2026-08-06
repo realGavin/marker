@@ -294,12 +294,31 @@ export default function PlaceScreen() {
 
         {facts.length > 0 && (
           <View style={styles.card}>
-            {facts.map((f) => (
-              <View key={f.label} style={styles.factRow}>
-                <Text style={[type.caption, { width: 100 }]}>{f.label}</Text>
-                <Text style={type.body}>{f.value}</Text>
+            {/* instrument strip: short numeric facts read as a cluster */}
+            {facts.filter((f) => f.value.length <= 4).length > 0 && (
+              <View style={styles.instrumentRow}>
+                {facts
+                  .filter((f) => f.value.length <= 4)
+                  .slice(0, 3)
+                  .map((f, i, arr) => (
+                    <View
+                      key={f.label}
+                      style={[styles.instrument, i < arr.length - 1 && styles.instrumentDivider]}
+                    >
+                      <Text style={type.numeral}>{f.value}</Text>
+                      <Text style={type.label}>{f.label}</Text>
+                    </View>
+                  ))}
               </View>
-            ))}
+            )}
+            {facts
+              .filter((f) => f.value.length > 4)
+              .map((f) => (
+                <View key={f.label} style={styles.factRow}>
+                  <Text style={[type.label, { width: 100 }]}>{f.label}</Text>
+                  <Text style={type.body}>{f.value}</Text>
+                </View>
+              ))}
           </View>
         )}
 
@@ -347,7 +366,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: spacing.xs,
     height: 44,
-    borderRadius: 10,
+    borderRadius: 3,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
@@ -355,20 +374,20 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   statusActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  statusActiveWant: { backgroundColor: colors.accent, borderColor: colors.accent },
+  statusActiveWant: { backgroundColor: colors.accentFill, borderColor: colors.accent },
   statusText: { fontSize: 15, fontWeight: "600", color: colors.primary },
   ratingRow: { flexDirection: "row", gap: 4, marginVertical: spacing.sm },
   noteInput: {
     marginTop: spacing.sm,
     minHeight: 60,
     borderWidth: 1,
-    borderColor: "#DDD8CC",
-    borderRadius: 8,
+    borderColor: "#DADAD6",
+    borderRadius: 3,
     padding: spacing.sm,
     color: colors.textPrimary,
     backgroundColor: colors.background,
   },
-  card: { backgroundColor: colors.surface, borderRadius: 12, padding: spacing.md, marginTop: spacing.md },
+  card: { backgroundColor: colors.surface, borderRadius: 4, padding: spacing.md, marginTop: spacing.md },
   addToList: {
     flexDirection: "row",
     alignItems: "center",
@@ -389,14 +408,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#EEE9DD",
+    borderTopColor: "#E7E7E3",
     marginTop: spacing.xs,
   },
   factRow: { flexDirection: "row", alignItems: "center", paddingVertical: spacing.xs },
+  instrumentRow: {
+    flexDirection: "row",
+    paddingVertical: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  instrument: { flex: 1, alignItems: "center", gap: 3 },
+  instrumentDivider: { borderRightWidth: 1, borderRightColor: colors.hairline },
   button: {
     marginTop: spacing.md,
     height: 48,
-    borderRadius: 8,
+    borderRadius: 3,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.primary,
