@@ -54,3 +54,38 @@ export async function cancelVisitReminders(visitId: string): Promise<void> {
     await Notifications.cancelScheduledNotificationAsync(`visit-${visitId}-${o.tag}`).catch(() => {});
   }
 }
+
+const VISIT_REMINDER_ID = /^visit-(.+)-(24h|4h)$/;
+
+/**
+ * Reconciles on-device reminders against the current visit list: cancels
+ * reminders for visits that no longer exist, and re-schedules any missing
+ * for visits that do (e.g. after a fresh install restored the cache but not
+ * the OS notification queue). Never re-prompts for permission.
+ */
+export async function reconcileReminders(
+  visits: Array<{ id: string; at: string; place: { name: string } }>,
+): Promise<void> {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  const validIds = new Set(visits.map((v) => v.id));
+  const present = new Set<string>();
+  for (const n of scheduled) {
+    const m = VISIT_REMINDER_ID.exec(n.identifier);
+    if (!m) continue;
+    if (validIds.has(m[1])) {
+      present.add(n.identifier);
+    } else {
+      await Notifications.cancelScheduledNotificationAsync(n.identifier).catch(() => {});
+    }
+  }
+
+  const { status } = await Notifications.getPermissionsAsync();
+  if (status !== "granted") return;
+
+  for (const v of visits) {
+    const at = new Date(v.at);
+    if (at.getTime() <= Date.now()) continue;
+    const missing = OFFSETS.some((o) => !present.has(`visit-${v.id}-${o.tag}`));
+    if (missing) await scheduleVisitReminders(v.id, v.place.name, at);
+  }
+}

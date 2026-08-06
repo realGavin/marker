@@ -159,5 +159,5 @@ const styles = StyleSheet.create({
   topRated: { marginTop: spacing.md, gap: 4 },
   topRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   topName: { color: "#C9C9CD", fontSize: 13, flex: 1 },
-  topScore: { color: colors.accent, fontSize: 13, fontWeight: "700" },
+  topScore: { color: colors.accentFill, fontSize: 13, fontWeight: "700" },
 });

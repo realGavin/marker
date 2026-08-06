@@ -30,6 +30,8 @@ export const golfSkin: Skin = {
     visitTime: "Tee time",
     visitTimes: "Tee times",
     setVisitTime: "Set a tee time",
+    tripStops: "Rounds",
+    tripNotesHint: "Anything else? (walkable, links style, resort…)",
     appName: "Marker Golf",
   },
   // "Machined Light": paper-white surfaces, black controls, hairline borders,

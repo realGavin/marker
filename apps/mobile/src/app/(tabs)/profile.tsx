@@ -124,7 +124,11 @@ export default function ProfileScreen() {
                 style: "destructive",
                 onPress: async () => {
                   const supabase = getSupabase();
-                  const { error } = (await supabase?.functions.invoke("delete-account")) ?? {};
+                  if (!supabase) {
+                    Alert.alert("Couldn't delete", "Please try again or contact support.");
+                    return;
+                  }
+                  const { error } = await supabase.functions.invoke("delete-account");
                   if (error) Alert.alert("Couldn't delete", "Please try again or contact support.");
                   else signOut();
                 },

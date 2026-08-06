@@ -12,7 +12,8 @@ const NICHE = "golf";
 interface TripInput {
   region: string;
   days: number;
-  rounds: number;
+  rounds?: number;
+  stops?: number; // niche-neutral synonym for rounds
   budget: "$" | "$$" | "$$$" | "any";
   notes?: string;
 }
@@ -111,7 +112,8 @@ Deno.serve(async (req) => {
   // ---- input
   const input = (await req.json()) as TripInput;
   const days = Math.min(Math.max(Math.round(input.days || 3), 1), 14);
-  const rounds = Math.min(Math.max(Math.round(input.rounds || days), 1), days * 2);
+  // the mobile engine is dropping golf vocabulary: `stops` is the same field
+  const rounds = Math.min(Math.max(Math.round(input.rounds ?? input.stops ?? days), 1), days * 2);
 
   // ---- retrieve real candidates (our code, not the model)
   const center = await resolveRegion(input.region);

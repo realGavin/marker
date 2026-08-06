@@ -32,6 +32,10 @@ export interface SkinVocabulary {
   visitTimes: string;
   /** CTA to schedule one, e.g. "Set a start time" */
   setVisitTime: string;
+  /** label for the per-trip activity count, e.g. "Hikes" */
+  tripStops: string;
+  /** placeholder example text for the trip notes field, e.g. "Anything else? (elevation gain, shade, permits…)" */
+  tripNotesHint: string;
   /** App display name for this niche, e.g. "Marker Trails" */
   appName: string;
 }

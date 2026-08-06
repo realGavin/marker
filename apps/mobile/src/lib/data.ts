@@ -223,7 +223,7 @@ export interface TripPlan {
   title: string | null;
   start_date: string | null; // YYYY-MM-DD
   invite_code: string;
-  request: { region: string; days: number; rounds: number };
+  request: { region: string; days: number; stops?: number; rounds?: number }; // engine-purity-ignore: legacy DB field name, unused
   itinerary: TripItinerary;
   created_at: string;
 }
@@ -281,7 +281,7 @@ export function useCreateTrip() {
         .insert({
           user_id: session.user.id,
           title: input.title,
-          request: { region: input.title, days: input.itinerary.days.length, rounds: 0 },
+          request: { region: input.title, days: input.itinerary.days.length, stops: 0 },
           itinerary: input.itinerary,
         })
         .select("id")
@@ -323,7 +323,7 @@ export type PlanTripError = "upgrade_required" | "monthly_limit" | "region_not_f
 export function usePlanTrip() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { region: string; days: number; rounds: number; budget: string; notes?: string }) => {
+    mutationFn: async (input: { region: string; days: number; stops: number; budget: string; notes?: string }) => {
       const { data, error } = await sb().functions.invoke("plan-trip", { body: input });
       if (error) {
         let code: PlanTripError = "failed";
@@ -443,7 +443,7 @@ export interface VisitTime {
 export function useVisitTimes() {
   const { session } = useAuth();
   return useQuery({
-    queryKey: ["visit-times"],
+    queryKey: ["visit-times", session?.user.id],
     enabled: !!session,
     queryFn: async (): Promise<VisitTime[]> => {
       const { data, error } = await sb()

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -34,7 +34,7 @@ import {
   type TripItinerary,
   type TripPlan,
 } from "../../lib/data";
-import { cancelVisitReminders } from "../../lib/reminders";
+import { cancelVisitReminders, reconcileReminders } from "../../lib/reminders";
 
 /** Labeled +/- numeric control — friendlier than a bare keyboard field. */
 function Stepper({
@@ -66,6 +66,12 @@ function Stepper({
       </View>
     </View>
   );
+}
+
+/** YYYY-MM-DD in local time (Date#toISOString is UTC and shifts the day for non-UTC users). */
+function localDateString(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /** Date for a given 1-based trip day, from the trip's start date. */
@@ -104,9 +110,13 @@ export default function TripsScreen() {
   const deleteVisitTime = useDeleteVisitTime();
   const upcoming = (visitTimes ?? []).filter((v) => new Date(v.at).getTime() > Date.now());
 
+  useEffect(() => {
+    if (visitTimes) reconcileReminders(visitTimes).catch(() => {});
+  }, [visitTimes]);
+
   const [region, setRegion] = useState("");
   const [days, setDays] = useState("3");
-  const [rounds, setRounds] = useState("3");
+  const [stops, setStops] = useState("3");
   const [budget, setBudget] = useState<(typeof BUDGETS)[number]>("any");
   const [notes, setNotes] = useState("");
   const [result, setResult] = useState<TripItinerary | null>(null);
@@ -119,7 +129,7 @@ export default function TripsScreen() {
       const res = await planTrip.mutateAsync({
         region,
         days: Number(days) || 3,
-        rounds: Number(rounds) || 3,
+        stops: Number(stops) || 3,
         budget,
         notes: notes || undefined,
       });
@@ -188,7 +198,7 @@ export default function TripsScreen() {
           />
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
             <Stepper label="Days" value={days} onChange={setDays} min={1} max={14} />
-            <Stepper label="Rounds" value={rounds} onChange={setRounds} min={1} max={20} />
+            <Stepper label={skin.vocab.tripStops} value={stops} onChange={setStops} min={1} max={20} />
           </View>
           <View style={styles.budgetRow}>
             {BUDGETS.map((b) => (
@@ -205,7 +215,7 @@ export default function TripsScreen() {
           </View>
           <TextInput
             style={[styles.input, { minHeight: 60 }]}
-            placeholder="Anything else? (walkable, links style, resort…)"
+            placeholder={skin.vocab.tripNotesHint}
             placeholderTextColor={colors.textSecondary}
             value={notes}
             onChangeText={setNotes}
@@ -241,7 +251,7 @@ export default function TripsScreen() {
             onTune={(tuneRegion, tuneDays) => {
               setRegion(tuneRegion);
               setDays(String(tuneDays));
-              setRounds(String(tuneDays));
+              setStops(String(tuneDays));
             }}
           />
         ))}
@@ -458,17 +468,34 @@ function TripEditor({ plan, onDone }: { plan: TripPlan; onDone: () => void }) {
   const [addingTo, setAddingTo] = useState<number | null>(null);
   const [stopQuery, setStopQuery] = useState("");
 
+  // Once the user edits anything, stop clobbering their changes with fresh
+  // server data; re-seed only while the editor is still untouched.
+  const dirty = useRef(false);
+  const markDirty = () => {
+    dirty.current = true;
+  };
+  useEffect(() => {
+    if (dirty.current) return;
+    setTitle(plan.title ?? plan.request.region);
+    setStartDate(plan.start_date);
+    setDays(JSON.parse(JSON.stringify(plan.itinerary.days)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan.itinerary, plan.title, plan.start_date]);
+
   const renumber = (list: TripItinerary["days"]) =>
     list.map((d, i) => ({ ...d, day: i + 1 }));
 
-  const removeStop = (dayIdx: number, placeId: string) =>
+  const removeStop = (dayIdx: number, placeId: string) => {
+    markDirty();
     setDays((prev) =>
       prev.map((d, i) => (i === dayIdx ? { ...d, places: d.places.filter((p) => p.id !== placeId) } : d)),
     );
+  };
 
   const addStop = async (dayIdx: number, slug: string) => {
     try {
       const place = await fetchPlaceBySlug(slug);
+      markDirty();
       setDays((prev) =>
         prev.map((d, i) =>
           i === dayIdx && !d.places.some((p) => p.id === place.id)
@@ -506,7 +533,10 @@ function TripEditor({ plan, onDone }: { plan: TripPlan; onDone: () => void }) {
       <TextInput
         style={styles.input}
         value={title}
-        onChangeText={setTitle}
+        onChangeText={(v) => {
+          markDirty();
+          setTitle(v);
+        }}
         placeholder="Trip name"
         placeholderTextColor={colors.textSecondary}
       />
@@ -516,7 +546,13 @@ function TripEditor({ plan, onDone }: { plan: TripPlan; onDone: () => void }) {
           {startDate ? `Starts ${dayDate(startDate, 1)}` : "Set a start date"}
         </Text>
         {startDate && (
-          <Pressable hitSlop={8} onPress={() => setStartDate(null)}>
+          <Pressable
+            hitSlop={8}
+            onPress={() => {
+              markDirty();
+              setStartDate(null);
+            }}
+          >
             <Ionicons name="close-circle-outline" size={17} color={colors.textSecondary} />
           </Pressable>
         )}
@@ -527,7 +563,10 @@ function TripEditor({ plan, onDone }: { plan: TripPlan; onDone: () => void }) {
           mode="date"
           display="inline"
           onChange={(_e, d) => {
-            if (d) setStartDate(d.toISOString().slice(0, 10));
+            if (d) {
+              markDirty();
+              setStartDate(localDateString(d));
+            }
             setDateOpen(false);
           }}
         />
@@ -540,7 +579,13 @@ function TripEditor({ plan, onDone }: { plan: TripPlan; onDone: () => void }) {
               DAY {dayIdx + 1}{dayDate(startDate, dayIdx + 1) ? ` · ${dayDate(startDate, dayIdx + 1)}` : ""}
             </Text>
             {days.length > 1 && (
-              <Pressable hitSlop={8} onPress={() => setDays((prev) => renumber(prev.filter((_x, i) => i !== dayIdx)))}>
+              <Pressable
+                hitSlop={8}
+                onPress={() => {
+                  markDirty();
+                  setDays((prev) => renumber(prev.filter((_x, i) => i !== dayIdx)));
+                }}
+              >
                 <Ionicons name="trash-outline" size={15} color={colors.textSecondary} />
               </Pressable>
             )}
@@ -594,7 +639,10 @@ function TripEditor({ plan, onDone }: { plan: TripPlan; onDone: () => void }) {
 
       <Pressable
         style={styles.addStop}
-        onPress={() => setDays((prev) => renumber([...prev, { day: prev.length + 1, note: "", places: [] }]))}
+        onPress={() => {
+          markDirty();
+          setDays((prev) => renumber([...prev, { day: prev.length + 1, note: "", places: [] }]));
+        }}
       >
         <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
         <Text style={styles.tripActionText}>Add a day</Text>

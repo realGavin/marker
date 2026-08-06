@@ -17,10 +17,12 @@ const BANNED = [
   /\btee\b/i,
   /\bcaddie/i,
   /\bplayed\b/i, // engine says "visited"; skins map vocabulary
+  /\brounds\b/i, // plural only; "Math.round" stays legal
 ];
 const EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".json"]);
-// The skin import path is the single allowed niche reference in the engine.
-const ALLOWED_LINE = /@marker\/skin-|SKIN_PACKAGE|skin-golf/;
+// The skin import path is allowed; so is an explicit escape hatch for
+// unavoidable references (e.g. a legacy DB field name we don't control).
+const ALLOWED_LINE = /@marker\/skin-|SKIN_PACKAGE|skin-golf|engine-purity-ignore/;
 
 let violations = 0;
 function walk(dir) {
