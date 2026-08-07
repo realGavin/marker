@@ -234,14 +234,14 @@ const KM_MAX = 150; // rpc/places_near is called with radius_km=140, plus roundi
 const KM_TRAVEL_CONTEXT_RE =
   /\b(?:drive|drives|driving|drove|from|away|apart|out|north|south|east|west|northeast|northwest|southeast|southwest|centre|center|transfer|commute|road|nearby|neighbou?r|next\s+door|airport|base|hotel|hop|detour|shuttle|minutes?|min|hours?|hrs?)\b/;
 /**
- * Length/size wording — if it shares the window with a km figure, that figure is
- * not a drive distance. Kept to unambiguous length words: "par" and bare "plays"
- * were tried and dropped, because "42 km from the center, a par 72 that plays
- * firm" is an ordinary drive figure and would have been failed. "long" is kept
- * (it is the tell in "plays 6.2 km long") minus its travel collocations.
+ * km used AS a length — the actual conversion tell. First-run data showed the
+ * model's normal (and correct) pattern is a yardage and a drive distance in the
+ * SAME sentence ("6,580 yards … 24 km from center"), so co-occurrence is not
+ * evidence of conversion. Only adjacency is: "plays 6.2 km", "6 km of golf",
+ * "6 km long", "a 6-km course/layout".
  */
-const KM_LENGTH_CONTEXT_RE =
-  /\b(?:yards?|yds?|yardage|length|holes\s+of|course\s+measures?|long(?!\s+(?:drive|haul|day|trip|transfer|road|way)))\b/;
+const KM_AS_LENGTH_RE =
+  /(?:\b(?:plays?|measures?|stretches?|spans?)\s+(?:about\s+|over\s+|nearly\s+)?\d+(?:\.\d+)?\s*km\b)|(?:\d+(?:\.\d+)?\s*[-\s]?km\s+(?:of\s+(?:golf|play(?:ing)?|holes?|turf|fairways?)|long\b|course\b|layout\b|track\b|round\b))/i;
 
 /**
  * Remove only the km figures that read as grounded travel distances, leaving
@@ -261,11 +261,18 @@ function stripGroundedKmFigures(text) {
     const window = text
       .slice(Math.max(0, start - 60), Math.min(text.length, end + 60))
       .toLowerCase();
+    // tight window for the as-length test: only wording adjacent to the figure
+    const tight = text
+      .slice(Math.max(0, start - 25), Math.min(text.length, end + 25))
+      .toLowerCase();
+    // First-run data: the model's dominant citation style is a bare
+    // parenthetical "(110 km)" with no travel word in range, so requiring
+    // travel context manufactured false positives. The as-length test plus the
+    // radius bound carry the real weight.
     const exempt =
       nums.length > 0 &&
       nums.every((n) => Number.isFinite(n) && n <= KM_MAX) &&
-      KM_TRAVEL_CONTEXT_RE.test(window) &&
-      !KM_LENGTH_CONTEXT_RE.test(window);
+      !KM_AS_LENGTH_RE.test(tight);
     if (!exempt) continue; // leave it in place; the digit sweep will judge it
     out += text.slice(cursor, start) + " ";
     cursor = end;
@@ -285,9 +292,9 @@ export function checkKmUnitConversion(text) {
   const sentences = String(text ?? "").split(/(?<=[.!?])\s+|\n+/);
   for (const s of sentences) {
     if (!/\d+(?:\.\d+)?\s*km\b/i.test(s)) continue;
-    // Same length-word list as the exemption, with the same "long drive" carve-out
-    // so an ordinary drive figure in a long-drive sentence isn't called a conversion.
-    if (!/\b(?:yards?|yds?|yardage|length|holes\s+of|long(?!\s+(?:drive|haul|day|trip|transfer|road|way)))\b/i.test(s)) continue;
+    // Adjacency, not co-occurrence: a yardage and a drive distance legitimately
+    // share sentences constantly. Only km-used-as-length phrasing is a conversion.
+    if (!KM_AS_LENGTH_RE.test(s)) continue;
     hits.push(s.trim());
   }
   return hits;

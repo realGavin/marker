@@ -143,7 +143,10 @@ Deno.serve(async (req) => {
     );
     if (within.length >= 10) candidates = within;
   }
-  candidates = candidates.slice(0, 40);
+  // Long trips get a leaner candidate list: the intelligence fields grew the
+  // payload enough that 40 candidates x 14 days can run past the function's
+  // time budget (observed http 546 at 150s on a 7-day statewide plan).
+  candidates = candidates.slice(0, days >= 6 ? 28 : 40);
   if (candidates.length === 0) return json({ error: "no_places_in_region" }, 422);
 
   // ---- compose: the model chooses among candidate ids only
@@ -210,7 +213,9 @@ Provided facts (from our database — the ONLY facts you may use; a field's abse
 - When the traveler states a timeframe, favour courses whose season_months cover it and avoid ones whose window clearly excludes it.
 - Any field may be missing. Never guess, infer, or estimate a missing value, and never mention that a value is missing or unknown — plan around it silently.
 - A number may appear in a note only if it is the exact value of a field provided for that course. Never do arithmetic on these values and never convert units.
-- In particular: if par or length_yds is absent for a course, never state a par or yardage for it — not even one you are confident about.`;
+- In particular: if par or length_yds is absent for a course, never state a par or yardage for it — not even one you are confident about.
+- The summary and day notes may mention only courses scheduled in place_ids — never another candidate, even by way of comparison.
+- fee_band is for your selection logic only. Never write fee bands, "$" symbols, or any other price or cost language in the summary or notes, no matter what the traveler's notes demand.`;
 
   async function compose(compact: boolean) {
     const res = await anthropic.messages.create({
