@@ -24,7 +24,19 @@ interface Candidate {
   name: string;
   city: string | null;
   region: string | null;
-  attrs: { access?: string; holes?: number; greenFeeBand?: string };
+  attrs: {
+    access?: string;
+    holes?: number;
+    greenFeeBand?: string;
+    // Course Intelligence Pack (written by tooling/etl). Any field may be absent.
+    par?: number;
+    lengthYds?: number;
+    lengthEst?: boolean;
+    elevRangeM?: number;
+    windMs?: number;
+    setting?: string[];
+    seasonMonths?: [number, number];
+  };
   description: string | null;
   lat: number;
   lng: number;
@@ -136,17 +148,30 @@ Deno.serve(async (req) => {
 
   // ---- compose: the model chooses among candidate ids only
   const anthropic = new Anthropic({ apiKey: Deno.env.get("ANTHROPIC_API_KEY")! });
-  const candidateBlock = candidates.map((c) => ({
-    id: c.id,
-    name: c.name,
-    city: c.city,
-    region: c.region,
-    km_from_center: Math.round(c.distance_km),
-    access: c.attrs?.access ?? "unknown",
-    holes: c.attrs?.holes,
-    fee_band: c.attrs?.greenFeeBand,
-    about: c.description?.slice(0, 160),
-  }));
+  // Only facts we actually hold reach the model. `undefined` properties are
+  // dropped by JSON.stringify, so absent attrs cost zero tokens and the model
+  // never sees a null it could misread as "flat"/"calm"/"short".
+  const candidateBlock = candidates.map((c) => {
+    const a: Candidate["attrs"] = c.attrs ?? {};
+    return {
+      id: c.id,
+      name: c.name,
+      city: c.city,
+      region: c.region,
+      km_from_center: Math.round(c.distance_km),
+      access: a.access ?? "unknown",
+      holes: a.holes ?? undefined,
+      fee_band: a.greenFeeBand ?? undefined,
+      par: a.par ?? undefined,
+      length_yds: a.lengthYds ?? undefined,
+      length_is_estimate: a.lengthYds != null && a.lengthEst === true ? true : undefined,
+      elev_range_m: a.elevRangeM ?? undefined,
+      wind_ms: a.windMs ?? undefined,
+      setting: a.setting && a.setting.length > 0 ? a.setting : undefined,
+      season_months: a.seasonMonths ?? undefined,
+      about: c.description?.slice(0, 160),
+    };
+  });
 
   const schema = {
     type: "object",
@@ -177,14 +202,22 @@ Absolute rules:
 - Never state prices or costs. The fee_band symbol, when present, may guide choices but must not appear as a dollar amount.
 - Prefer variety and sensible routing (close courses on the same/adjacent days; use km_from_center).
 - Notes are 1-2 sentences: pacing, drive order, why the course fits. No fabricated facts about courses; use only the provided fields.
-- At most 2 rounds per day.`;
+- At most 2 rounds per day.
+Provided facts (from our database — the ONLY facts you may use; a field's absence is not a fact):
+- par; length_yds (total yardage, approximate when length_is_estimate is true); elev_range_m (metres of elevation spread across the property — small means flat and walkable, large means hilly); wind_ms (long-term mean wind — higher means a windier, more exposed test); setting (landscape tags: coastal, wooded, open, desert, mountain, links); season_months ([startMonth, endMonth], 1-indexed playable window that may wrap past December).
+- Use these to sequence and justify days: open with flatter, calmer, shorter courses; save the windy or exposed coastal test for a highlight day; put the longest or hilliest round where the group is freshest; sequence so the trip builds rather than repeats.
+- When the traveler states a timeframe, favour courses whose season_months cover it and avoid ones whose window clearly excludes it.
+- Any field may be missing. Never guess, infer, or estimate a missing value, and never mention that a value is missing or unknown — plan around it silently.
+- A number may appear in a note only if it is the exact value of a field provided for that course. Never do arithmetic on these values and never convert units.`;
 
   async function compose(compact: boolean) {
     const res = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 4000,
       system: compact
-        ? `Build a ${days}-day itinerary with ${rounds} rounds as compact JSON. place_ids must contain the chosen candidate ids — never leave every day empty. Notes max 12 words. Only provided ids; no prices.`
+        // Retry path: same absolute rules, fewer words. The compact candidate
+        // list below carries no course facts, so notes must carry none either.
+        ? `Build a ${days}-day itinerary with ${rounds} rounds as compact JSON. place_ids must contain the chosen candidate ids — never leave every day empty. Notes max 12 words: pacing and drive order only. Only the ids given here; never a course you know from outside the list. Never state prices or costs. State no facts or numbers about a course — the detail fields are absent from this list, so do not guess them and do not mention that they are missing.`
         : SYSTEM,
       messages: [
         {

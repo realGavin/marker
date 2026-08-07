@@ -4,6 +4,7 @@
   "scripts": {
     "typecheck": "pnpm -r --if-present typecheck",
     "lint:purity": "node scripts/engine-purity-lint.mjs",
+    "eval:planner": "node tooling/eval/plan-trip-eval.mjs",
     "verify": "pnpm typecheck && pnpm lint:purity"
   },
   "packageManager": "pnpm@10.12.1",

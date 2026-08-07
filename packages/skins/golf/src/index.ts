@@ -14,9 +14,60 @@ export const golfAttributes = z.object({
   /** Coarse price band only — never exact prices (grounding rule). */
   greenFeeBand: z.enum(["$", "$$", "$$$", "$$$$"]).optional(),
   website: z.string().url().optional(),
+  // --- Course Intelligence Pack (written by tooling/etl) ---
+  /** Total scorecard length in yards. */
+  lengthYds: z.number().int().min(800).max(8500).optional(),
+  /** True when lengthYds is derived/estimated rather than sourced; renders with a "≈" prefix. */
+  lengthEst: z.boolean().optional(),
+  /** Elevation spread across the property in metres (max minus min). */
+  elevRangeM: z.number().int().min(0).max(400).optional(),
+  /** Mean wind speed in metres per second. */
+  windMs: z.number().min(0).max(20).optional(),
+  /** Landscape descriptors; multiple can apply (e.g. coastal + links). */
+  setting: z.array(z.enum(["coastal", "wooded", "open", "desert", "mountain", "links"])).optional(),
+  /** Playable window as [startMonth, endMonth], 1-indexed; may wrap (e.g. [10, 5]). */
+  seasonMonths: z.tuple([z.number().int().min(1).max(12), z.number().int().min(1).max(12)]).optional(),
 });
 
 export type GolfAttributes = z.infer<typeof golfAttributes>;
+
+const MONTH_NAMES = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+const SETTING_LABELS: Record<NonNullable<GolfAttributes["setting"]>[number], string> = {
+  coastal: "Coastal",
+  wooded: "Wooded",
+  open: "Open",
+  desert: "Desert",
+  mountain: "Mountain",
+  links: "Links",
+};
+
+/** "Rolling · 28 m" style terrain summary; flat ground gets no number. */
+function elevationLabel(m: number): string {
+  if (m < 15) return "Flat";
+  return `${m <= 40 ? "Rolling" : "Hilly"} · ${m} m`;
+}
+
+/** [3, 11] -> "Mar–Nov"; [1, 12] -> "Year-round"; [10, 5] -> "Oct–May". */
+function seasonLabel([start, end]: [number, number]): string {
+  if (start === 1 && end === 12) return "Year-round";
+  const from = MONTH_NAMES[start - 1]!;
+  const to = MONTH_NAMES[end - 1]!;
+  return from === to ? from : `${from}–${to}`;
+}
 
 export const golfSkin: Skin = {
   nicheId: "golf",
@@ -68,6 +119,12 @@ export const golfSkin: Skin = {
     const facts: Array<{ label: string; value: string }> = [];
     if (a.holes) facts.push({ label: "Holes", value: String(a.holes) });
     if (a.par) facts.push({ label: "Par", value: String(a.par) });
+    if (a.lengthYds !== undefined)
+      facts.push({
+        label: "Length",
+        value: `${a.lengthEst ? "≈" : ""}${a.lengthYds.toLocaleString("en-US")} yds`,
+      });
+    if (a.elevRangeM !== undefined) facts.push({ label: "Elevation", value: elevationLabel(a.elevRangeM) });
     if (a.courseType && a.courseType !== "unknown")
       facts.push({ label: "Type", value: a.courseType[0]!.toUpperCase() + a.courseType.slice(1) });
     if (a.access && a.access !== "unknown")
@@ -75,7 +132,21 @@ export const golfSkin: Skin = {
     if (a.designer) facts.push({ label: "Designer", value: a.designer });
     if (a.yearOpened) facts.push({ label: "Opened", value: String(a.yearOpened) });
     if (a.greenFeeBand) facts.push({ label: "Green fees", value: a.greenFeeBand });
+    if (a.seasonMonths) facts.push({ label: "Season", value: seasonLabel(a.seasonMonths) });
     return facts;
+  },
+  // Display-only descriptors for the chip row; the map filters below are the
+  // machine-readable version of the same signals.
+  settingChips: (attrs: unknown) => {
+    const parsed = golfAttributes.safeParse(attrs);
+    if (!parsed.success) return [];
+    const a = parsed.data;
+    const chips = (a.setting ?? []).map((s) => SETTING_LABELS[s]);
+    if (a.windMs !== undefined) {
+      if (a.windMs > 6) chips.push("Windy");
+      else if (a.windMs < 4) chips.push("Calm");
+    }
+    return chips;
   },
   curatedLists,
   tripTemplates,
@@ -102,15 +173,33 @@ export const golfSkin: Skin = {
   // name (~25%, matching the real-world private share); "public" = everything
   // without a private signal — the honest proxy, since explicit public tagging
   // in the source data is ~2.5%.
+  // Terrain/character/length tags come from the Course Intelligence Pack ETL
+  // pass. Coverage is uneven by design (open data is sparse): the architect
+  // prunes any chip whose tag covers under 10% of pins before ship, so a
+  // filter never looks broken by returning almost nothing.
   pinFilterGroups: [
     { key: "holes", label: "Holes" },
     { key: "access", label: "Access" },
+    { key: "terrain", label: "Terrain" },
+    { key: "character", label: "Character" },
+    { key: "length", label: "Length" },
   ],
   pinFilters: [
     { key: "18", label: "18 holes", group: "holes" },
     { key: "9", label: "9 holes", group: "holes" },
     { key: "public", label: "Public", group: "access" },
     { key: "private", label: "Private", group: "access" },
+    // ("Links" was cut: OSM's golf:links is a sub-course grouping label, not a
+    // links-style indicator — inland courses carry it, so it can't ship.)
+    { key: "coastal", label: "Coastal", group: "terrain" },
+    { key: "wooded", label: "Wooded", group: "terrain" },
+    { key: "open", label: "Open", group: "terrain" },
+    { key: "desert", label: "Desert", group: "terrain" },
+    { key: "mountain", label: "Mountain", group: "terrain" },
+    { key: "windy", label: "Windy", group: "character" },
+    { key: "hilly", label: "Hilly", group: "character" },
+    { key: "short", label: "Short (<5,800 yds)", group: "length" },
+    { key: "long", label: "Long (>6,800 yds)", group: "length" },
   ],
 };
 

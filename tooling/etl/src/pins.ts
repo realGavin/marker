@@ -23,6 +23,17 @@ function tags(r: PlaceRow): string[] {
   const name = r.name.toLowerCase();
   const isPrivate = r.attrs.access === "private" || /\bcountry club\b/.test(name);
   t.push(isPrivate ? "private" : "public");
+
+  // Course Intelligence Pack signals (enrich-elevation/-wind/-setting/-length) —
+  // emitted verbatim/derived when present, omitted otherwise (partial coverage
+  // while those streams are still batching is expected and fine).
+  for (const s of r.attrs.setting ?? []) t.push(s);
+  if (r.attrs.windMs != null && r.attrs.windMs > 6) t.push("windy");
+  if (r.attrs.elevRangeM != null && r.attrs.elevRangeM > 40) t.push("hilly");
+  if (r.attrs.lengthYds != null) {
+    if (r.attrs.lengthYds < 5800) t.push("short");
+    else if (r.attrs.lengthYds > 6800) t.push("long");
+  }
   return t;
 }
 

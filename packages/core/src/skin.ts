@@ -137,6 +137,14 @@ export interface Skin {
    * Pure function: attrs in, ordered label/value pairs out.
    */
   attributeFacts: (attrs: unknown) => Array<{ label: string; value: string }>;
+  /**
+   * Optional short display words derived from validated attrs, e.g.
+   * ["Alpine", "Forested"] for a hiking niche. The engine renders them
+   * generically as a chip row on the place page — it never interprets them,
+   * so they must be display-ready, one or two words each, and few enough to
+   * fit one line. Return [] when attrs don't validate or nothing applies.
+   */
+  settingChips?: (attrs: unknown) => string[];
   curatedLists: CuratedListSeed[];
   /** Precomputed trip inspiration shown on the trips surface. */
   tripTemplates: TripTemplate[];
