@@ -1,6 +1,7 @@
-import { readFile, writeFile, readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { OsmElement, PlaceRow } from "./types.js";
+import { readPlaces, writePlaces, withPlacesLock } from "./places-io.js";
 
 /**
  * Yardage enrichment from per-hole line geometry (data/raw-holes-geom, from
@@ -13,7 +14,6 @@ import type { OsmElement, PlaceRow } from "./types.js";
  */
 
 const RAW_DIR = new URL("../data/raw-holes-geom/", import.meta.url).pathname;
-const DATA = new URL("../data/", import.meta.url).pathname;
 
 const ASSIGN_RADIUS_M = 2_000;
 const VALID_N = new Set([9, 18, 27, 36]);
@@ -37,7 +37,11 @@ interface Hole {
 }
 
 export async function enrichLength(): Promise<void> {
-  const rows: PlaceRow[] = JSON.parse(await readFile(DATA + "places.json", "utf8"));
+  return withPlacesLock("enrich-length", () => enrichLengthUnlocked());
+}
+
+async function enrichLengthUnlocked(): Promise<void> {
+  const rows: PlaceRow[] = await readPlaces();
   const byState = new Map<string, PlaceRow[]>();
   for (const r of rows) {
     if (!r.region) continue;
@@ -90,7 +94,7 @@ export async function enrichLength(): Promise<void> {
     }
   }
 
-  let computed = 0, outliers = 0, written = 0;
+  let computed = 0, outliers = 0, written = 0, partialSkipped = 0, repaired = 0;
   for (const r of rows) {
     const holes = holesByCourse.get(r.slug);
     if (!holes?.length) continue;
@@ -109,6 +113,26 @@ export async function enrichLength(): Promise<void> {
     const yds = Math.round((totalM * METERS_TO_YARDS) / 10) * 10;
     computed++;
 
+    // Guard: a "complete" 1..N ref set can still be a partial mapping of a
+    // bigger course — e.g. only the front 9 of an 18-hole course surveyed.
+    // Cross-check against the course's known hole count before treating the
+    // total as the course's full length.
+    const known = r.attrs.holes ?? r.attrs.holesEst;
+    const partial = (n === 9 && known != null && known >= 14) || (n === 18 && known != null && known >= 23);
+    if (partial) {
+      partialSkipped++;
+      // lengthYds is only ever written here (always paired with lengthEst),
+      // so if it's set on a row that now fails the guard, it was written by
+      // a prior (pre-fix) run — remove it so a re-run repairs already-cached
+      // rows without needing extract-holes-geom to run again.
+      if (r.attrs.lengthYds != null) {
+        delete r.attrs.lengthYds;
+        delete r.attrs.lengthEst;
+        repaired++;
+      }
+      continue;
+    }
+
     const clamp = round.length >= 14 ? CLAMP_18 : CLAMP_9;
     if (yds < clamp[0] || yds > clamp[1]) {
       outliers++;
@@ -119,11 +143,15 @@ export async function enrichLength(): Promise<void> {
     written++;
   }
 
-  await writeFile(DATA + "places.json", JSON.stringify(rows));
+  await writePlaces(rows);
   console.log(
     `length enrich: states cached ${cachedStates.length}/51, ${assigned} hole ways assigned (${orphans} orphans)`,
   );
   console.log(
     `length enrich: ${computed} courses had a computable total, ${outliers} discarded as outliers, ${written} lengthYds written`,
+  );
+  console.log(
+    `length enrich: ${partialSkipped} courses skipped as partial mappings (complete N-hole ref set but ` +
+      `known hole count says the course is bigger), ${repaired} had a stale half-course lengthYds removed`,
   );
 }

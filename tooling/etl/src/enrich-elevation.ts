@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { OsmElement, PlaceRow } from "./types.js";
 import { US_STATES } from "./extract.js";
+import { readPlaces, writePlaces, withPlacesLock } from "./places-io.js";
 
 /**
  * Elevation-range enrichment via USGS EPQS (Elevation Point Query Service),
@@ -89,16 +90,19 @@ function samplePoints(r: PlaceRow, holes: { lat: number; lon: number; ref: numbe
   const points: { lat: number; lon: number }[] = [{ lat: r.lat, lon: r.lng }];
   if (holes?.length) {
     const sorted = [...holes].sort((a, b) => (a.ref ?? 999) - (b.ref ?? 999));
-    const step = Math.max(1, Math.floor(sorted.length / MAX_HOLES));
+    // ceil (not floor) so the stride spreads up to MAX_HOLES samples across
+    // the WHOLE sorted list — floor(n/MAX_HOLES) rounds down to a stride of
+    // 1 for any n < 2*MAX_HOLES, which (combined with the points.length cap
+    // below) sampled only the front half of the course for e.g. n=18.
+    const step = Math.max(1, Math.ceil(sorted.length / MAX_HOLES));
     for (let i = 0; i < sorted.length && points.length < MAX_HOLES + 1; i += step) {
       points.push({ lat: sorted[i]!.lat, lon: sorted[i]!.lon });
     }
   }
   if (points.length < 3) {
+    // No (or too few) mapped holes: pad with N/S offsets around the centroid.
     const dLat = OFFSET_M / 111_320;
-    const dLon = OFFSET_M / (111_320 * Math.cos((r.lat * Math.PI) / 180));
     points.push({ lat: r.lat + dLat, lon: r.lng }, { lat: r.lat - dLat, lon: r.lng });
-    if (points.length < 3) points.push({ lat: r.lat, lon: r.lng + dLon });
   }
   return points;
 }
@@ -140,7 +144,11 @@ async function fetchElevation(lat: number, lon: number): Promise<number | null> 
 }
 
 export async function enrichElevation(limit?: number): Promise<void> {
-  const rows: PlaceRow[] = JSON.parse(await readFile(DATA + "places.json", "utf8"));
+  return withPlacesLock("enrich-elevation", () => enrichElevationUnlocked(limit));
+}
+
+async function enrichElevationUnlocked(limit?: number): Promise<void> {
+  const rows: PlaceRow[] = await readPlaces();
   const state = await readState();
   const holeMap = await holeCentersByCourse(rows);
 
@@ -162,7 +170,10 @@ export async function enrichElevation(limit?: number): Promise<void> {
           if (pi === 0) centroidElev = e;
         }
       }
-      if (elevs.length >= 2 && centroidElev != null) {
+      // Publish only when at least 4 of the (up to 11) sample points
+      // resolved — 2 was too permissive (e.g. just the centroid + one hole),
+      // giving a "range" that isn't a meaningful spread across the course.
+      if (elevs.length >= 4 && centroidElev != null) {
         state[row.slug] = { range: Math.round(Math.max(...elevs) - Math.min(...elevs)), centroid: Math.round(centroidElev) };
         ok++;
       } else {
@@ -183,7 +194,56 @@ export async function enrichElevation(limit?: number): Promise<void> {
     const entry = state[r.slug];
     if (entry != null) r.attrs.elevRangeM = entry.range;
   }
-  await writeFile(DATA + "places.json", JSON.stringify(rows));
+  await writePlaces(rows);
   console.log(`elevation done: ok ${ok}, fail ${fail} (rerun to retry the rest — state file skips done slugs)`);
   console.log(`elevation: ${Object.keys(state).length}/${rows.length} places now have elevRangeM`);
+}
+
+const SPARSE_AFFECTED_FILE = DATA + "elevation-sparse-affected.json";
+/** Old, front-half-biased stride was in effect for any course with this many assigned holes. */
+const SPARSE_MIN_HOLES = 12;
+
+/**
+ * `--redo-sparse`: every slug currently in elevation-state.json was sampled
+ * under the pre-fix, front-half-biased stride (see samplePoints above). That
+ * bias only mattered for courses with enough mapped holes that the old
+ * floor()-based stride under-sampled the back half — courses with fewer
+ * assigned holes than that got full coverage even under the old code, so
+ * they don't need a re-sample.
+ *
+ * This is local-only (state file + already-cached raw-holes, no network) and
+ * cheap, unlike a full elevation re-run (hours of USGS EPQS fetches). It
+ * identifies the affected slugs, removes them from elevation-state.json so a
+ * plain `enrich-elevation` run treats them as "todo" again, and prints the
+ * count. It does NOT itself re-fetch — that's the (now much smaller) re-run
+ * left for the architect.
+ */
+export async function markSparseElevation(): Promise<void> {
+  const rows: PlaceRow[] = await readPlaces();
+  const state = await readState();
+  const holeMap = await holeCentersByCourse(rows);
+
+  const affected: string[] = [];
+  for (const slug of Object.keys(state)) {
+    const n = holeMap.get(slug)?.length ?? 0;
+    if (n >= SPARSE_MIN_HOLES) affected.push(slug);
+  }
+
+  for (const slug of affected) delete state[slug];
+  await writeFile(STATE_FILE, JSON.stringify(state));
+  await writeFile(SPARSE_AFFECTED_FILE, JSON.stringify(affected));
+
+  console.log(
+    `elevation --redo-sparse: ${affected.length} courses were sampled under the old front-half-biased ` +
+      `stride and have >=${SPARSE_MIN_HOLES} assigned holes (the affected class)`,
+  );
+  console.log(
+    `elevation --redo-sparse: removed those ${affected.length} slugs from elevation-state.json ` +
+      `(list also written to data/elevation-sparse-affected.json); ${Object.keys(state).length} slugs remain done`,
+  );
+  console.log(
+    "elevation --redo-sparse: re-run command for the architect: " +
+      "cd tooling/etl && corepack pnpm etl enrich-elevation " +
+      `(now only reprocesses the ${affected.length} marked slugs, not the full ${rows.length}-course batch)`,
+  );
 }

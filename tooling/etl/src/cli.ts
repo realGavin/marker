@@ -47,6 +47,10 @@ switch (cmd) {
     await (await import("./enrich-length.js")).enrichLength();
     break;
   case "enrich-elevation": {
+    if (process.argv.includes("--redo-sparse")) {
+      await (await import("./enrich-elevation.js")).markSparseElevation();
+      break;
+    }
     const limitArg = process.argv.find((a) => a.startsWith("--limit="))?.split("=")[1];
     await (await import("./enrich-elevation.js")).enrichElevation(limitArg ? Number(limitArg) : undefined);
     break;
@@ -98,7 +102,8 @@ switch (cmd) {
       "usage: pnpm etl <extract|transform|report|load|all|" +
         "extract-holes|enrich-holes|enrich-par|extract-holes-geom|enrich-length|" +
         "enrich-elevation|enrich-setting|enrich-wind|enrich-season|enrich-wikidata|" +
-        "report-intel|pins|seed-lists|embed|describe|icon|scrub|photos|photos-report|photos-upload> [--force] [--state=XX]",
+        "report-intel|pins|seed-lists|embed|describe|icon|scrub|photos|photos-report|photos-upload> " +
+        "[--force] [--state=XX] [--limit=N] [--redo-sparse]",
     );
     process.exit(1);
 }

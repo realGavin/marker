@@ -19,6 +19,9 @@
 //          fetch the token itself via /auth/v1/token.
 //   Optional env:
 //     SUPABASE_SERVICE_ROLE_KEY only needed for --reset-quota
+//     MARKER_EVAL_USER_ID       pins the eval account's user id. When set,
+//                               --reset-quota refuses unless the JWT resolves to
+//                               exactly this id. Strongly recommended.
 //
 //   The eval account must hold a `pro` entitlement — free accounts are capped
 //   at one plan ever and every prompt after the first would 402.
@@ -29,13 +32,19 @@
 //     node tooling/eval/plan-trip-eval.mjs --only=ci-1,ci-2
 //     node tooling/eval/plan-trip-eval.mjs --json=out.json # machine-readable report
 //     node tooling/eval/plan-trip-eval.mjs --reset-quota   # see note below
+//     node tooling/eval/plan-trip-eval.mjs --reset-quota --yes-delete-trips
 //
 // Quota note: the function caps Pro users at 20 plans/month and this suite is
 // larger than that, so a FULL run needs `--reset-quota`. That flag does one
 // thing: DELETE trip_plans rows for the eval user id (and no one else), once
 // before the run and again if the run walks back into the cap. It requires
-// SUPABASE_SERVICE_ROLE_KEY and never touches another account's rows. Manual
-// equivalent, if you'd rather do it yourself in the SQL editor:
+// SUPABASE_SERVICE_ROLE_KEY and never touches another account's rows.
+//
+// Because that DELETE lands on whoever the JWT resolves to, the flag is gated:
+// set MARKER_EVAL_USER_ID and the harness verifies the resolved id matches it
+// (refusing otherwise); leave it unset and the harness prints the resolved id
+// and requires `--yes-delete-trips` next to `--reset-quota`. Manual equivalent,
+// if you'd rather do it yourself in the SQL editor:
 //   delete from public.trip_plans where user_id = '<eval user id>';
 // Without the flag the harness refuses to start a run it can't finish, and you
 // can still run subsets with --only=.
@@ -195,6 +204,95 @@ const normalizeName = (s) =>
     .replace(/\s+/g, " ")
     .trim();
 
+// -----------------------------------------------------------------------------
+// km figures
+//
+// A "12 km" in a note normally quotes km_from_center, which the function computes
+// and hands the model. That value is grounded by construction but is NOT
+// reconstructable from the DB attrs the numeric check rebuilds its allow-set
+// from, so it has to be removed before the digit sweep or every plan fails.
+//
+// The exemption used to strip ANY "NN km", which also hid the one thing the
+// prompt explicitly forbids: converting yards to km. A 6,500-yd course is "5.9
+// km", so magnitude alone cannot separate the two cases — a converted yardage is
+// a SMALLER number than most drive distances. The rule below therefore requires
+// all three of:
+//   1. every number in the figure <= KM_MAX (the retrieval radius; a course
+//      farther than that was never a candidate, so it cannot be a drive figure),
+//   2. travel wording within ~60 chars (drive/from/away/apart/compass point/…),
+//   3. no length wording in that same window (yards/yds/yardage/length/long/
+//      holes of/course measures).
+//
+// RESIDUAL RISK, stated plainly: a converted yardage dressed in travel wording
+// still slips through — "5.9 km of golf, 20 minutes from the last stop" has a
+// small number, a travel cue, and no length word, so it is exempted and the 5.9
+// never reaches the digit sweep. This is narrow but real. The sentence-level
+// check below (checkKmUnitConversion) is the backstop for the common phrasings;
+// a conversion that avoids BOTH length wording and an obvious "of golf" tell is
+// not detectable from out here and needs a human reading the notes.
+const KM_MAX = 150; // rpc/places_near is called with radius_km=140, plus rounding slack
+const KM_TRAVEL_CONTEXT_RE =
+  /\b(?:drive|drives|driving|drove|from|away|apart|out|north|south|east|west|northeast|northwest|southeast|southwest|centre|center|transfer|commute|road|nearby|neighbou?r|next\s+door|airport|base|hotel|hop|detour|shuttle|minutes?|min|hours?|hrs?)\b/;
+/**
+ * Length/size wording — if it shares the window with a km figure, that figure is
+ * not a drive distance. Kept to unambiguous length words: "par" and bare "plays"
+ * were tried and dropped, because "42 km from the center, a par 72 that plays
+ * firm" is an ordinary drive figure and would have been failed. "long" is kept
+ * (it is the tell in "plays 6.2 km long") minus its travel collocations.
+ */
+const KM_LENGTH_CONTEXT_RE =
+  /\b(?:yards?|yds?|yardage|length|holes\s+of|course\s+measures?|long(?!\s+(?:drive|haul|day|trip|transfer|road|way)))\b/;
+
+/**
+ * Remove only the km figures that read as grounded travel distances, leaving
+ * every other km figure in the text so the digit sweep can flag it.
+ * Matches are consumed left to right without overlap, so a second km figure in
+ * the first one's context window is still examined on its own terms.
+ */
+function stripGroundedKmFigures(text) {
+  const KM_FIGURE_RE = /\d+(?:\.\d+)?(?:\s*[–—-]\s*\d+(?:\.\d+)?)?\s*km\b/g;
+  let out = "";
+  let cursor = 0;
+  for (const m of text.matchAll(KM_FIGURE_RE)) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (start < cursor) continue;
+    const nums = (m[0].match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
+    const window = text
+      .slice(Math.max(0, start - 60), Math.min(text.length, end + 60))
+      .toLowerCase();
+    const exempt =
+      nums.length > 0 &&
+      nums.every((n) => Number.isFinite(n) && n <= KM_MAX) &&
+      KM_TRAVEL_CONTEXT_RE.test(window) &&
+      !KM_LENGTH_CONTEXT_RE.test(window);
+    if (!exempt) continue; // leave it in place; the digit sweep will judge it
+    out += text.slice(cursor, start) + " ";
+    cursor = end;
+  }
+  return out + text.slice(cursor);
+}
+
+/**
+ * Targeted unit-conversion check, independent of the exemption above.
+ *
+ * The prompt forbids converting units outright. A km figure sharing a SENTENCE
+ * with length wording is a yds->km conversion in all but name, so it fails
+ * whether or not stripGroundedKmFigures would have exempted it.
+ */
+export function checkKmUnitConversion(text) {
+  const hits = [];
+  const sentences = String(text ?? "").split(/(?<=[.!?])\s+|\n+/);
+  for (const s of sentences) {
+    if (!/\d+(?:\.\d+)?\s*km\b/i.test(s)) continue;
+    // Same length-word list as the exemption, with the same "long drive" carve-out
+    // so an ordinary drive figure in a long-drive sentence isn't called a conversion.
+    if (!/\b(?:yards?|yds?|yardage|length|holes\s+of|long(?!\s+(?:drive|haul|day|trip|transfer|road|way)))\b/i.test(s)) continue;
+    hits.push(s.trim());
+  }
+  return hits;
+}
+
 /**
  * Numeric-claim check.
  *
@@ -220,7 +318,9 @@ const normalizeName = (s) =>
  *  4. Spelled-out numbers ("seven thousand yards", "eighteen holes") are
  *     invisible to it.
  *  5. Unit conversions and rounding produce digit runs that are not in attrs,
- *     so they are flagged. Also intended — the prompt forbids both.
+ *     so they are flagged. Also intended — the prompt forbids both. The one
+ *     exception is the km exemption above, whose residual gap is documented
+ *     there and partly covered by checkKmUnitConversion.
  *  6. Numbers inside a course's own name (e.g. "Bunker Hill 9") would false-
  *     positive, so selected place names are stripped from the text first.
  */
@@ -237,15 +337,32 @@ export function checkNumericClaims(text, placeRows, input) {
   add(input.days);
   add(input.stops ?? input.rounds);
 
+  // Numbers the traveler themselves wrote. core-4 asks for "36 holes some days";
+  // the planner echoing 36 back is quoting the request, not inventing a fact, so
+  // it must not be flagged. Commas are stripped first so "6,000" reads as 6000,
+  // matching how the model's text is normalized below.
+  for (const field of [input.notes, input.region]) {
+    const raw = String(field ?? "").replace(/(\d),(?=\d{3}\b)/g, "$1");
+    for (const tok of raw.match(/\d+(?:\.\d+)?/g) ?? []) add(tok);
+  }
+
+  // Only fields the edge function actually serializes into candidateBlock may be
+  // whitelisted — anything else would let a training-data number pass as grounded.
+  // Deliberately NOT whitelisted:
+  //   holesEst — a boolean estimate flag, never a legal figure to quote, and the
+  //     payload never carries it; whitelisting it added nothing but risk.
+  //   yearOpened — a real attrs field, but candidateBlock does not send it, so the
+  //     model can only know a course's opening year from training data. Quoting it
+  //     is exactly the fabrication this check exists to catch. Adding year_opened
+  //     to the payload is the architect's call; until that happens the eval must
+  //     not pre-authorize the number.
   for (const p of placeRows) {
     const a = p.attrs ?? {};
     add(a.holes);
-    add(a.holesEst);
     add(a.par);
     add(a.lengthYds);
     add(a.elevRangeM);
     add(a.windMs);
-    add(a.yearOpened);
     if (Array.isArray(a.seasonMonths)) a.seasonMonths.forEach(add);
   }
 
@@ -256,10 +373,7 @@ export function checkNumericClaims(text, placeRows, input) {
     scrubbed = scrubbed.split(p.name).join(" ");
   }
   scrubbed = scrubbed.replace(/(\d),(?=\d{3}\b)/g, "$1");
-  // "NN km" / "NN–NN km" figures quote km_from_center from the candidate
-  // payload — grounded by construction and not reconstructable from DB attrs,
-  // so remove them before hunting for ungrounded digit runs.
-  scrubbed = scrubbed.replace(/\d+(?:\.\d+)?(?:\s*[–-]\s*\d+(?:\.\d+)?)?\s*km\b/g, " ");
+  scrubbed = stripGroundedKmFigures(scrubbed);
 
   const offenders = [];
   for (const tok of scrubbed.match(/\d+(?:\.\d+)?/g) ?? []) {
@@ -332,6 +446,11 @@ export function validatePlan(spec, itinerary, placeRows) {
     fails.push(`ungrounded number(s) in itinerary text: ${offenders.join(", ")}`);
   }
 
+  // --- a km figure in a sentence about length is a forbidden unit conversion
+  for (const s of checkKmUnitConversion(text)) {
+    fails.push(`km figure used as a length (unit conversion is forbidden): "${s}"`);
+  }
+
   return { fails, warns };
 }
 
@@ -377,9 +496,42 @@ async function plansThisMonth(jwt, userId) {
   return Number.isFinite(total) ? total : 0;
 }
 
+/**
+ * Guard for --reset-quota, which issues a service-role DELETE of every
+ * trip_plans row for whatever user the JWT happens to resolve to. A stale or
+ * mistyped MARKER_EVAL_JWT would quietly wipe a real account's saved trips, so
+ * the destructive path is never reached on an unconfirmed identity:
+ *   - MARKER_EVAL_USER_ID set   -> the resolved id must equal it, or we refuse.
+ *   - MARKER_EVAL_USER_ID unset -> print the resolved id and demand an explicit
+ *                                  --yes-delete-trips alongside --reset-quota.
+ * Throws to abort the run; returns nothing when the reset is cleared to proceed.
+ */
+function assertResetTarget(userId) {
+  if (!SERVICE_KEY) throw new Error("--reset-quota needs SUPABASE_SERVICE_ROLE_KEY");
+  const pinned = (process.env.MARKER_EVAL_USER_ID ?? "").trim();
+  if (pinned) {
+    if (pinned !== userId) {
+      throw new Error(
+        `--reset-quota refused: MARKER_EVAL_USER_ID is ${pinned} but the JWT resolves to ${userId}.\n` +
+          `Refusing to delete trip_plans for an account that is not the pinned eval user. ` +
+          `Fix MARKER_EVAL_JWT (or MARKER_EVAL_EMAIL/PASSWORD), or update MARKER_EVAL_USER_ID if the eval account really changed.`,
+      );
+    }
+    return;
+  }
+  console.log(`  --reset-quota target user: ${userId} (MARKER_EVAL_USER_ID is not set)`);
+  if (!hasFlag("yes-delete-trips")) {
+    throw new Error(
+      `--reset-quota will DELETE every trip_plans row for user ${userId}.\n` +
+        `Confirm the id above is the eval account, then either set MARKER_EVAL_USER_ID=${userId} ` +
+        `or re-run with --yes-delete-trips alongside --reset-quota.`,
+    );
+  }
+}
+
 /** Opt-in, service-role, eval-user-scoped cleanup of rows this harness created. */
 async function resetQuota(userId) {
-  if (!SERVICE_KEY) throw new Error("--reset-quota needs SUPABASE_SERVICE_ROLE_KEY");
+  assertResetTarget(userId); // re-checked on every call, not just the first
   const res = await fetch(`${SUPABASE_URL}/rest/v1/trip_plans?user_id=eq.${userId}`, {
     method: "DELETE",
     headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, Prefer: "count=exact" },

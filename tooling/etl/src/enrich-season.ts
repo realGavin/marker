@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, access } from "node:fs/promises";
 import { createGunzip } from "node:zlib";
 import { Readable } from "node:stream";
 import type { PlaceRow } from "./types.js";
+import { readPlaces, writePlaces, withPlacesLock } from "./places-io.js";
 
 /**
  * Playable-season enrichment from NOAA/NCEI 1991-2020 U.S. Climate Normals
@@ -139,8 +140,12 @@ function longestRun(playable: boolean[]): [number, number] | null {
 }
 
 export async function enrichSeason(): Promise<void> {
+  return withPlacesLock("enrich-season", () => enrichSeasonUnlocked());
+}
+
+async function enrichSeasonUnlocked(): Promise<void> {
   await ensureCached();
-  const rows: PlaceRow[] = JSON.parse(await readFile(DATA + "places.json", "utf8"));
+  const rows: PlaceRow[] = await readPlaces();
   const stations = parseInventory(await readFile(INVENTORY_FILE, "utf8"));
   const tmaxByStation = parseTmaxNormals(await readFile(NORMAL_CSV_FILE, "utf8"));
   const usable = stations.filter((s) => tmaxByStation.has(s.id));
@@ -172,7 +177,7 @@ export async function enrichSeason(): Promise<void> {
     if (run[0] === 1 && run[1] === 12) allYear++;
   }
 
-  await writeFile(DATA + "places.json", JSON.stringify(rows));
+  await writePlaces(rows);
   console.log(
     `enrich-season: ${matched}/${rows.length} matched a station within ${MAX_STATION_DIST_M / 1000}km ` +
       `(${noneMatched} unmatched — sparse station coverage), ${written} got seasonMonths (${allYear} year-round)`,

@@ -1,6 +1,7 @@
 import { readFile, writeFile, access } from "node:fs/promises";
 import type { PlaceRow } from "./types.js";
 import { slugify } from "./transform.js";
+import { readPlaces, writePlaces, withPlacesLock } from "./places-io.js";
 
 /**
  * Designer + year-opened enrichment from Wikidata (free, no key; SPARQL
@@ -124,7 +125,11 @@ export async function enrichWikidata(): Promise<void> {
   const wdCourses = groupByItem(bindings);
   console.log(`enrich-wikidata: ${bindings.length} raw bindings -> ${wdCourses.length} distinct US golf courses`);
 
-  const rows: PlaceRow[] = JSON.parse(await readFile(DATA + "places.json", "utf8"));
+  return withPlacesLock("enrich-wikidata", () => enrichWikidataUnlocked(wdCourses));
+}
+
+async function enrichWikidataUnlocked(wdCourses: WikidataCourse[]): Promise<void> {
+  const rows: PlaceRow[] = await readPlaces();
 
   let matched = 0, designerFilled = 0, yearFilled = 0;
   const samples: string[] = [];
@@ -157,7 +162,7 @@ export async function enrichWikidata(): Promise<void> {
     }
   }
 
-  await writeFile(DATA + "places.json", JSON.stringify(rows));
+  await writePlaces(rows);
   console.log(`enrich-wikidata: ${matched}/${wdCourses.length} wikidata courses matched (>=${TOKEN_OVERLAP_MIN} name overlap, <${MATCH_RADIUS_M}m)`);
   console.log(`enrich-wikidata: designer filled ${designerFilled}, yearOpened filled ${yearFilled}`);
   console.log("enrich-wikidata: sample matches:");

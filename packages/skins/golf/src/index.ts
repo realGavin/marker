@@ -7,7 +7,10 @@ import { tripTemplates } from "../seeds/trip-templates";
 export const golfAttributes = z.object({
   holes: z.number().int().min(1).max(45).optional(),
   par: z.number().int().min(27).max(80).optional(),
-  courseType: z.enum(["links", "parkland", "desert", "mountain", "heathland", "resort", "unknown"]).optional(),
+  // ("links" was cut from every enum in this skin: OSM's golf:links is a
+  // sub-course grouping label, not a links-style indicator, so no row can
+  // honestly carry the signal — see the pinFilters note below.)
+  courseType: z.enum(["parkland", "desert", "mountain", "heathland", "resort", "unknown"]).optional(),
   access: z.enum(["public", "private", "semi-private", "municipal", "resort", "unknown"]).optional(),
   designer: z.string().optional(),
   yearOpened: z.number().int().min(1700).max(2100).optional(),
@@ -23,8 +26,8 @@ export const golfAttributes = z.object({
   elevRangeM: z.number().int().min(0).max(400).optional(),
   /** Mean wind speed in metres per second. */
   windMs: z.number().min(0).max(20).optional(),
-  /** Landscape descriptors; multiple can apply (e.g. coastal + links). */
-  setting: z.array(z.enum(["coastal", "wooded", "open", "desert", "mountain", "links"])).optional(),
+  /** Landscape descriptors; multiple can apply (e.g. coastal + open). */
+  setting: z.array(z.enum(["coastal", "wooded", "open", "desert", "mountain"])).optional(),
   /** Playable window as [startMonth, endMonth], 1-indexed; may wrap (e.g. [10, 5]). */
   seasonMonths: z.tuple([z.number().int().min(1).max(12), z.number().int().min(1).max(12)]).optional(),
 });
@@ -52,13 +55,21 @@ const SETTING_LABELS: Record<NonNullable<GolfAttributes["setting"]>[number], str
   open: "Open",
   desert: "Desert",
   mountain: "Mountain",
-  links: "Links",
 };
+
+/**
+ * Terrain summary split into its display parts: a word every course gets, and
+ * a metre range only meaningful ground gets. Flat ground gets no number.
+ */
+function elevationParts(m: number): { word: string; range: string | null } {
+  if (m < 15) return { word: "Flat", range: null };
+  return { word: m <= 40 ? "Rolling" : "Hilly", range: `${m} m` };
+}
 
 /** "Rolling · 28 m" style terrain summary; flat ground gets no number. */
 function elevationLabel(m: number): string {
-  if (m < 15) return "Flat";
-  return `${m <= 40 ? "Rolling" : "Hilly"} · ${m} m`;
+  const { word, range } = elevationParts(m);
+  return range ? `${word} · ${range}` : word;
 }
 
 /** [3, 11] -> "Mar–Nov"; [1, 12] -> "Year-round"; [10, 5] -> "Oct–May". */
@@ -82,7 +93,7 @@ export const golfSkin: Skin = {
     visitTimes: "Tee times",
     setVisitTime: "Set a tee time",
     tripStops: "Rounds",
-    tripNotesHint: "Anything else? (walkable, links style, resort…)",
+    tripNotesHint: "Anything else? (walkable, coastal, resort…)",
     appName: "Marker Golf",
   },
   // "Machined Light": paper-white surfaces, black controls, hairline borders,
@@ -112,19 +123,48 @@ export const golfSkin: Skin = {
     },
   },
   attributeSchema: golfAttributes,
+  // The first four facts carry `cluster` payloads: the engine renders those as
+  // the instrument strip (numeral over a caps unit) and everything after as
+  // label/value rows. Splitting numeral from unit here is what keeps the
+  // engine from having to parse golf strings back apart.
   attributeFacts: (attrs: unknown) => {
     const parsed = golfAttributes.safeParse(attrs);
     if (!parsed.success) return [];
     const a = parsed.data;
-    const facts: Array<{ label: string; value: string }> = [];
-    if (a.holes) facts.push({ label: "Holes", value: String(a.holes) });
-    if (a.par) facts.push({ label: "Par", value: String(a.par) });
-    if (a.lengthYds !== undefined)
+    const facts: ReturnType<Skin["attributeFacts"]> = [];
+    if (a.holes)
+      facts.push({
+        label: "Holes",
+        value: String(a.holes),
+        cluster: { numeral: String(a.holes), unit: "Holes" },
+      });
+    // Par is assembled from per-hole tags rather than read off a scorecard —
+    // measured, but derived.
+    if (a.par)
+      facts.push({
+        label: "Par",
+        value: String(a.par),
+        cluster: { numeral: String(a.par), unit: "Par" },
+        derived: true,
+      });
+    if (a.lengthYds !== undefined) {
+      const numeral = a.lengthYds.toLocaleString("en-US");
       facts.push({
         label: "Length",
-        value: `${a.lengthEst ? "≈" : ""}${a.lengthYds.toLocaleString("en-US")} yds`,
+        value: `${a.lengthEst ? "≈" : ""}${numeral} yds`,
+        cluster: { numeral, unit: a.lengthEst ? "≈ yds" : "yds" },
+        derived: true,
       });
-    if (a.elevRangeM !== undefined) facts.push({ label: "Elevation", value: elevationLabel(a.elevRangeM) });
+    }
+    if (a.elevRangeM !== undefined) {
+      const { word, range } = elevationParts(a.elevRangeM);
+      facts.push({
+        label: "Elevation",
+        value: elevationLabel(a.elevRangeM),
+        cluster: { numeral: word, unit: range ?? "Terrain" },
+        derived: true,
+      });
+    }
     if (a.courseType && a.courseType !== "unknown")
       facts.push({ label: "Type", value: a.courseType[0]!.toUpperCase() + a.courseType.slice(1) });
     if (a.access && a.access !== "unknown")
@@ -132,7 +172,8 @@ export const golfSkin: Skin = {
     if (a.designer) facts.push({ label: "Designer", value: a.designer });
     if (a.yearOpened) facts.push({ label: "Opened", value: String(a.yearOpened) });
     if (a.greenFeeBand) facts.push({ label: "Green fees", value: a.greenFeeBand });
-    if (a.seasonMonths) facts.push({ label: "Season", value: seasonLabel(a.seasonMonths) });
+    // Playable window comes from climate data, not from the club.
+    if (a.seasonMonths) facts.push({ label: "Season", value: seasonLabel(a.seasonMonths), derived: true });
     return facts;
   },
   // Display-only descriptors for the chip row; the map filters below are the

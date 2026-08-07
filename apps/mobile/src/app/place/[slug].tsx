@@ -34,30 +34,12 @@ import { useVisitTimes, useAddVisitTime, useDeleteVisitTime } from "../../lib/da
 /** Rating stored as 0–20 (half steps); shown as 0–10. */
 const shownRating = (r: number) => (r / 2).toFixed(r % 2 ? 1 : 0);
 
-/** Facts shown compactly in the instrument cluster, in display order. */
-const CLUSTER_LABELS = ["Holes", "Par", "Length", "Elevation"];
+type Fact = ReturnType<typeof skin.attributeFacts>[number];
+/** A fact the skin marked for the instrument strip by giving it a `cluster`. */
+type ClusterFact = Fact & { cluster: NonNullable<Fact["cluster"]> };
 
-type ClusterFact = { key: string; numeral: string; label: string };
-
-/**
- * Compact instrument-cluster rendering for a fact recognized by label.
- * Everything else renders the raw label/value as-is.
- */
-function toClusterItem(f: { label: string; value: string }): ClusterFact {
-  if (f.label === "Length") {
-    const approx = f.value.startsWith("≈");
-    const numeral = f.value
-      .replace(/^≈/, "")
-      .replace(/\s*yds$/i, "")
-      .trim();
-    return { key: f.label, numeral, label: approx ? "≈ yds" : "yds" };
-  }
-  if (f.label === "Elevation") {
-    const [lead, rest] = f.value.split(" · ");
-    return { key: f.label, numeral: lead ?? f.value, label: rest ?? "Terrain" };
-  }
-  return { key: f.label, numeral: f.value, label: f.label };
-}
+/** The strip fits four instruments; the skin picks which, and in what order. */
+const CLUSTER_MAX = 4;
 
 export default function PlaceScreen() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
@@ -109,12 +91,13 @@ export default function PlaceScreen() {
   }
 
   const facts = skin.attributeFacts(place.attrs);
-  const clusterFacts = CLUSTER_LABELS.map((label) => facts.find((f) => f.label === label))
-    .filter((f): f is { label: string; value: string } => !!f)
-    .map(toClusterItem);
-  const clusterLabelSet = new Set(clusterFacts.map((c) => c.key));
+  const clusterFacts = facts
+    .filter((f): f is ClusterFact => f.cluster !== undefined)
+    .slice(0, CLUSTER_MAX);
+  const rowFacts = facts.filter((f) => f.cluster === undefined);
   const settingChips = skin.settingChips?.(place.attrs) ?? [];
-  const showDataFootnote = settingChips.length > 0 || facts.some((f) => f.value.includes("≈"));
+  // Anything the skin flagged as computed from open data — including the chips.
+  const showDataFootnote = facts.some((f) => f.derived) || settingChips.length > 0;
   const website = (place.attrs as { website?: string } | null)?.website;
   const location = [place.city, place.region].filter(Boolean).join(", ");
   const status = myLog?.status;
@@ -335,28 +318,26 @@ export default function PlaceScreen() {
 
         {facts.length > 0 && (
           <View style={styles.card}>
-            {/* instrument cluster: Holes / Par / Length / Elevation, recognized by label */}
+            {/* instrument strip: whichever facts the skin gave a cluster payload */}
             {clusterFacts.length > 0 && (
               <View style={styles.instrumentRow}>
-                {clusterFacts.map((c, i, arr) => (
+                {clusterFacts.map((f, i, arr) => (
                   <View
-                    key={c.key}
+                    key={f.label}
                     style={[styles.instrument, i < arr.length - 1 && styles.instrumentDivider]}
                   >
-                    <Text style={type.numeral}>{c.numeral}</Text>
-                    <Text style={type.label}>{c.label}</Text>
+                    <Text style={type.numeral}>{f.cluster.numeral}</Text>
+                    <Text style={type.label}>{f.cluster.unit}</Text>
                   </View>
                 ))}
               </View>
             )}
-            {facts
-              .filter((f) => !clusterLabelSet.has(f.label))
-              .map((f) => (
-                <View key={f.label} style={styles.factRow}>
-                  <Text style={[type.label, { width: 100 }]}>{f.label}</Text>
-                  <Text style={type.body}>{f.value}</Text>
-                </View>
-              ))}
+            {rowFacts.map((f) => (
+              <View key={f.label} style={styles.factRow}>
+                <Text style={[type.label, { width: 100 }]}>{f.label}</Text>
+                <Text style={type.body}>{f.value}</Text>
+              </View>
+            ))}
             {showDataFootnote && (
               <Text style={[type.caption, { fontSize: 10, marginTop: spacing.sm }]}>
                 Some facts are derived from open map and climate data.

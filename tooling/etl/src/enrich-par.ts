@@ -1,7 +1,8 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { OsmElement, PlaceRow } from "./types.js";
 import { US_STATES } from "./extract.js";
+import { readPlaces, writePlaces, withPlacesLock } from "./places-io.js";
 
 /**
  * Par enrichment from per-hole OSM tags. data/raw-holes/*.json (fetched by
@@ -15,7 +16,6 @@ import { US_STATES } from "./extract.js";
  */
 
 const RAW_DIR = new URL("../data/raw-holes/", import.meta.url).pathname;
-const DATA = new URL("../data/", import.meta.url).pathname;
 
 /** Max distance (m) from a hole to the course centroid it belongs to. */
 const ASSIGN_RADIUS_M = 2_000;
@@ -30,7 +30,11 @@ interface Hole {
 }
 
 export async function enrichPar(): Promise<void> {
-  const rows: PlaceRow[] = JSON.parse(await readFile(DATA + "places.json", "utf8"));
+  return withPlacesLock("enrich-par", () => enrichParUnlocked());
+}
+
+async function enrichParUnlocked(): Promise<void> {
+  const rows: PlaceRow[] = await readPlaces();
   const byState = new Map<string, PlaceRow[]>();
   for (const r of rows) {
     if (!r.region) continue;
@@ -82,18 +86,20 @@ export async function enrichPar(): Promise<void> {
   }
 
   const byN: Record<number, number> = { 9: 0, 18: 0, 27: 0, 36: 0 };
-  let computed = 0, kept = 0, outliers = 0, alreadyExplicit = 0, links = 0;
+  let computed = 0, kept = 0, outliers = 0, alreadyExplicit = 0, links = 0, partialSkipped = 0, repaired = 0;
 
   for (const r of rows) {
-    const holes = holesByCourse.get(r.slug);
-    if (!holes?.length) continue;
-
     // golf:links turned out to be a sub-course grouping label in OSM, not a
-    // links-style indicator (inland courses carry it) — never write it.
+    // links-style indicator (inland courses carry it) — never write it. This
+    // runs for every row, not just rows with assigned holes, so a course
+    // whose holes go unassigned on a later run can't keep a stale tag.
     if (r.attrs.setting?.includes("links")) {
       r.attrs.setting = r.attrs.setting.filter((s) => s !== "links");
       links++;
     }
+
+    const holes = holesByCourse.get(r.slug);
+    if (!holes?.length) continue;
 
     const n = holes.length;
     if (!VALID_N.has(n)) continue;
@@ -111,6 +117,25 @@ export async function enrichPar(): Promise<void> {
     const sum = round.reduce((acc, h) => acc + (h.par as number), 0);
     computed++;
 
+    // Guard: a "complete" 1..N ref set can still be a partial mapping of a
+    // bigger course — e.g. only the front 9 of an 18-hole course surveyed.
+    // Cross-check against the course's known hole count before treating the
+    // sum as the course total.
+    const known = r.attrs.holes ?? r.attrs.holesEst;
+    const partial = (n === 9 && known != null && known >= 14) || (n === 18 && known != null && known >= 23);
+    if (partial) {
+      partialSkipped++;
+      // Repair: if the stored par is exactly what this sum would produce, it
+      // was almost certainly written by a prior (pre-fix) run of this same
+      // computation — remove it so a re-run of enrich-par is enough to fix
+      // already-cached rows, without touching a genuinely explicit par tag.
+      if (r.attrs.par === sum) {
+        delete r.attrs.par;
+        repaired++;
+      }
+      continue;
+    }
+
     if (sum < PAR_SUM_MIN || sum > PAR_SUM_MAX) {
       outliers++;
       continue;
@@ -123,7 +148,7 @@ export async function enrichPar(): Promise<void> {
     kept++;
   }
 
-  await writeFile(DATA + "places.json", JSON.stringify(rows));
+  await writePlaces(rows);
   console.log(
     `par enrich: ${assigned} holes assigned (${orphans} orphans); complete sets by N: ` +
       `9=${byN[9]} 18=${byN[18]} 27=${byN[27]} 36=${byN[36]}`,
@@ -132,6 +157,10 @@ export async function enrichPar(): Promise<void> {
     `par enrich: ${computed} courses had a computable sum, ${outliers} discarded as outliers ` +
       `(outside ${PAR_SUM_MIN}-${PAR_SUM_MAX}), ${alreadyExplicit} already had explicit par, ` +
       `${kept} newly written`,
+  );
+  console.log(
+    `par enrich: ${partialSkipped} courses skipped as partial mappings (complete N-hole ref set but ` +
+      `known hole count says the course is bigger), ${repaired} had a stale half-course par removed`,
   );
   console.log(`par enrich: ${links} courses tagged setting="links" from golf:links holes`);
 }

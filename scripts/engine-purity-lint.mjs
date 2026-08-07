@@ -18,6 +18,14 @@ const BANNED = [
   /\bcaddie/i,
   /\bplayed\b/i, // engine says "visited"; skins map vocabulary
   /\brounds\b/i, // plural only; "Math.round" stays legal
+  // Fact vocabulary. The engine renders facts from the Skin contract's fields
+  // (label/value/cluster/derived), so it never has to name one. Word
+  // boundaries keep legitimate engine words legal: \bpar\b matches the
+  // standalone word only, never parse/part/params/separator/Partial.
+  /\bpar\b/i,
+  /\byds\b/i,
+  /\byardage\b/i,
+  /\bholes?\b/i,
 ];
 const EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".json"]);
 // The skin import path is allowed; so is an explicit escape hatch for

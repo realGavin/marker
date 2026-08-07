@@ -134,9 +134,38 @@ export interface Skin {
   attributeSchema: z.ZodTypeAny;
   /**
    * Renders the niche facts shown on a place detail page from validated attrs.
-   * Pure function: attrs in, ordered label/value pairs out.
+   * Pure function: attrs in, ordered display-ready entries out. The engine
+   * never parses or re-splits these strings — it reads only the fields below,
+   * so the skin owns every word and every number the fact block shows.
+   *
+   * Each entry:
+   * - `label` / `value`: display-ready strings for a plain fact row, e.g.
+   *   { label: "Surface", value: "Packed gravel" } in a hiking niche.
+   * - `cluster`: present when the fact should also read as an instrument —
+   *   a big figure with a tiny caps unit under it — instead of a row.
+   *   `numeral` is the figure, `unit` the caps label. A hiking Distance fact
+   *   clusters as { numeral: "14.2", unit: "≈ km" }; the skin decides the
+   *   split, including where an "≈" or a unit word goes. `value` stays the
+   *   readable one-string form and is unused while `cluster` is present.
+   * - `derived`: true when the fact is computed from open data rather than
+   *   stated by a source — e.g. a distance measured off the mapped route
+   *   instead of read from a trail sign. Still measured, still honest, just
+   *   not authored; the engine discloses it.
+   *
+   * Engine rendering rule (fixed, so skins can rely on it):
+   * facts WITH `cluster` render in the instrument strip as numeral + caps
+   * unit label, in the order returned, capped at 4 (any beyond the 4th are
+   * dropped, not demoted to rows); facts without `cluster` render as
+   * label/value rows, also in the order returned; if any fact carries
+   * `derived: true` — or the skin returns any settingChips — the engine
+   * appends its generic data-provenance footnote.
    */
-  attributeFacts: (attrs: unknown) => Array<{ label: string; value: string }>;
+  attributeFacts: (attrs: unknown) => Array<{
+    label: string;
+    value: string;
+    cluster?: { numeral: string; unit: string };
+    derived?: boolean;
+  }>;
   /**
    * Optional short display words derived from validated attrs, e.g.
    * ["Alpine", "Forested"] for a hiking niche. The engine renders them

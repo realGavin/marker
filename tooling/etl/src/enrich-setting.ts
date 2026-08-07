@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { fromFile, fromUrl, type GeoTIFF } from "geotiff";
 import type { PlaceRow } from "./types.js";
+import { readPlaces, writePlaces, withPlacesLock } from "./places-io.js";
 
 /**
  * Environment/setting tags, each from a different free public raster or
@@ -8,10 +9,14 @@ import type { PlaceRow } from "./types.js";
  * merged into attrs.setting (deduped), never clobbering tags another stream
  * already wrote (e.g. enrich-par's "links").
  *
- * Ordering dependency: "mountain" and "windy" read data/elevation-state.json
- * and data/wind-state.json (written by enrich-elevation.ts / enrich-wind.ts)
- * — run those first. Courses missing that data simply don't get the tag,
- * silently, so this is safe to run before/without them.
+ * Ordering dependency: "mountain" reads data/elevation-state.json (written
+ * by enrich-elevation.ts) — run that first. Courses missing that data simply
+ * don't get the tag, silently, so this is safe to run before/without it.
+ *
+ * "windy" is NOT stored here: the skin's setting enum has no "windy" member
+ * (it's derived downstream from attrs.windMs in pins.ts / the skin's chip
+ * builder — single source of truth), so this stream also purges any stale
+ * "windy" entry a pre-fix run may have left in attrs.setting.
  */
 
 const DATA = new URL("../data/", import.meta.url).pathname;
@@ -222,9 +227,13 @@ interface ElevEntry {
 }
 
 export async function enrichSetting(woodedOpenLimit?: number): Promise<void> {
-  const rows: PlaceRow[] = JSON.parse(await readFile(DATA + "places.json", "utf8"));
+  return withPlacesLock("enrich-setting", () => enrichSettingUnlocked(woodedOpenLimit));
+}
 
-  // ---- fast, local-only tags: coastal, desert, mountain, windy ----
+async function enrichSettingUnlocked(woodedOpenLimit?: number): Promise<void> {
+  const rows: PlaceRow[] = await readPlaces();
+
+  // ---- fast, local-only tags: coastal, desert, mountain ----
   console.log("enrich-setting: building coastline grid index...");
   const coastGrid = await buildCoastGrid();
   console.log(`enrich-setting: coastline grid ready (${coastGrid.size} cells)`);
@@ -239,14 +248,8 @@ export async function enrichSetting(woodedOpenLimit?: number): Promise<void> {
   } catch {
     console.log("enrich-setting: no elevation-state.json yet — mountain tag skipped for all courses");
   }
-  let windState: Record<string, number> = {};
-  try {
-    windState = JSON.parse(await readFile(DATA + "wind-state.json", "utf8"));
-  } catch {
-    console.log("enrich-setting: no wind-state.json yet — windy tag skipped for all courses");
-  }
 
-  let coastal = 0, desert = 0, mountain = 0, windy = 0;
+  let coastal = 0, desert = 0, mountainAdded = 0, mountainRemoved = 0, windyPurged = 0;
   for (const r of rows) {
     if (nearestCoastM(coastGrid, r.lat, r.lng) < COASTAL_RADIUS_M) {
       mergeSetting(r, "coastal");
@@ -257,21 +260,37 @@ export async function enrichSetting(woodedOpenLimit?: number): Promise<void> {
       mergeSetting(r, "desert");
       desert++;
     }
+
+    // Mountain: recomputed every run (not just additive) from the elevation
+    // state cache — range >= 50m on its own, or a smaller range at real
+    // altitude, so a flat high-altitude course (e.g. an indoor club in CO)
+    // doesn't get tagged just for being tall.
     const elev = elevState[r.slug];
-    if (elev && (elev.range > 60 || elev.centroid > 1500)) {
-      mergeSetting(r, "mountain");
-      mountain++;
+    if (elev) {
+      const qualifies = elev.range >= 50 || (elev.centroid >= 1500 && elev.range >= 25);
+      const hasTag = r.attrs.setting?.includes("mountain") ?? false;
+      if (qualifies && !hasTag) {
+        mergeSetting(r, "mountain");
+        mountainAdded++;
+      } else if (!qualifies && hasTag) {
+        r.attrs.setting = r.attrs.setting!.filter((s) => s !== "mountain");
+        mountainRemoved++;
+      }
     }
-    const wind = windState[r.slug];
-    if (wind != null && wind > 6) {
-      mergeSetting(r, "windy");
-      windy++;
+
+    // windy is derived from attrs.windMs downstream (pins.ts / the skin's
+    // chip builder) — it's not a member of the setting enum, so any prior
+    // write of it here would fail schema parse and drop the whole facts
+    // card. Idempotent cleanup: purge stale "windy" entries every run.
+    if (r.attrs.setting?.includes("windy")) {
+      r.attrs.setting = r.attrs.setting.filter((s) => s !== "windy");
+      windyPurged++;
     }
   }
-  await writeFile(DATA + "places.json", JSON.stringify(rows));
+  await writePlaces(rows);
   console.log(
-    `enrich-setting: coastal ${coastal}, desert ${desert}, mountain ${mountain} (of ${Object.keys(elevState).length} w/ elevation), ` +
-      `windy ${windy} (of ${Object.keys(windState).length} w/ wind)`,
+    `enrich-setting: coastal ${coastal}, desert ${desert}, mountain +${mountainAdded}/-${mountainRemoved} ` +
+      `(of ${Object.keys(elevState).length} w/ elevation), windy purged ${windyPurged}`,
   );
 
   // ---- slow, remote-range-read tags: wooded/open ----
@@ -311,14 +330,14 @@ export async function enrichSetting(woodedOpenLimit?: number): Promise<void> {
       if (n % 200 === 0) {
         console.log(`enrich-setting: wooded/open ${n}/${todo.length} (ok ${ok}, fail ${fail})`);
         await writeFile(WORLDCOVER_STATE_FILE, JSON.stringify(wcState));
-        await writeFile(DATA + "places.json", JSON.stringify(rows));
+        await writePlaces(rows);
       }
     }
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
   await writeFile(WORLDCOVER_STATE_FILE, JSON.stringify(wcState));
-  await writeFile(DATA + "places.json", JSON.stringify(rows));
+  await writePlaces(rows);
   const woodedCount = Object.values(wcState).filter((v) => v.wooded).length;
   const openCount = Object.values(wcState).filter((v) => v.open).length;
   console.log(

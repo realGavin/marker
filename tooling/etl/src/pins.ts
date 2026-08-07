@@ -30,7 +30,10 @@ function tags(r: PlaceRow): string[] {
   for (const s of r.attrs.setting ?? []) t.push(s);
   if (r.attrs.windMs != null && r.attrs.windMs > 4) t.push("windy"); // top ~5% of US mean winds
   if (r.attrs.elevRangeM != null && r.attrs.elevRangeM > 40) t.push("hilly");
-  if (r.attrs.lengthYds != null) {
+  // lengthYds is a full-course total (see enrich-length.ts's guard); a
+  // 9-hole course's lengthYds is a 9-hole total, so "short"/"long" would
+  // mislabel it against the 18-hole thresholds below.
+  if ((holes ?? 0) >= 14 && r.attrs.lengthYds != null) {
     if (r.attrs.lengthYds < 5800) t.push("short");
     else if (r.attrs.lengthYds > 6800) t.push("long");
   }

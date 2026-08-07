@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { fromUrl, type GeoTIFF } from "geotiff";
 import type { PlaceRow } from "./types.js";
+import { readPlaces, writePlaces, withPlacesLock } from "./places-io.js";
 
 /**
  * Long-term mean 10m wind speed, from the Global Wind Atlas (DTU Wind
@@ -53,7 +54,11 @@ async function samplePoint(tiff: GeoTIFF, lat: number, lon: number): Promise<num
 }
 
 export async function enrichWind(limit?: number): Promise<void> {
-  const rows: PlaceRow[] = JSON.parse(await readFile(DATA + "places.json", "utf8"));
+  return withPlacesLock("enrich-wind", () => enrichWindUnlocked(limit));
+}
+
+async function enrichWindUnlocked(limit?: number): Promise<void> {
+  const rows: PlaceRow[] = await readPlaces();
   const state = await readState();
   const todo = rows.filter((r) => !(r.slug in state)).slice(0, limit ?? Infinity);
   console.log(`wind: ${rows.length} places, ${Object.keys(state).length} done, ${todo.length} to process`);
@@ -87,7 +92,7 @@ export async function enrichWind(limit?: number): Promise<void> {
     const v = state[r.slug];
     if (v != null) r.attrs.windMs = v;
   }
-  await writeFile(DATA + "places.json", JSON.stringify(rows));
+  await writePlaces(rows);
   console.log(`wind done: ok ${ok}, fail ${fail} (rerun to retry the rest — state file skips done slugs)`);
   console.log(`wind: ${Object.keys(state).length}/${rows.length} places now have windMs`);
 }
