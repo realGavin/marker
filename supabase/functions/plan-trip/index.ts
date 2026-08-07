@@ -208,7 +208,8 @@ Provided facts (from our database — the ONLY facts you may use; a field's abse
 - Use these to sequence and justify days: open with flatter, calmer, shorter courses; save the windy or exposed coastal test for a highlight day; put the longest or hilliest round where the group is freshest; sequence so the trip builds rather than repeats.
 - When the traveler states a timeframe, favour courses whose season_months cover it and avoid ones whose window clearly excludes it.
 - Any field may be missing. Never guess, infer, or estimate a missing value, and never mention that a value is missing or unknown — plan around it silently.
-- A number may appear in a note only if it is the exact value of a field provided for that course. Never do arithmetic on these values and never convert units.`;
+- A number may appear in a note only if it is the exact value of a field provided for that course. Never do arithmetic on these values and never convert units.
+- In particular: if par or length_yds is absent for a course, never state a par or yardage for it — not even one you are confident about.`;
 
   async function compose(compact: boolean) {
     const res = await anthropic.messages.create({

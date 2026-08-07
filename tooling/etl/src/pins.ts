@@ -28,7 +28,7 @@ function tags(r: PlaceRow): string[] {
   // emitted verbatim/derived when present, omitted otherwise (partial coverage
   // while those streams are still batching is expected and fine).
   for (const s of r.attrs.setting ?? []) t.push(s);
-  if (r.attrs.windMs != null && r.attrs.windMs > 6) t.push("windy");
+  if (r.attrs.windMs != null && r.attrs.windMs > 4) t.push("windy"); // top ~5% of US mean winds
   if (r.attrs.elevRangeM != null && r.attrs.elevRangeM > 40) t.push("hilly");
   if (r.attrs.lengthYds != null) {
     if (r.attrs.lengthYds < 5800) t.push("short");

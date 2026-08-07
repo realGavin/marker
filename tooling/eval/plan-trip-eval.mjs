@@ -92,7 +92,7 @@ const PROMPTS = [
 
   // --- regions with no courses (must fail, must not hallucinate) --------------
   { id: "empty-1", input: { region: "Antarctica", days: 3, stops: 3, budget: "any" }, expectErrors: ["region_not_found", "no_places_in_region"] },
-  { id: "empty-2", input: { region: "Atlantis", days: 3, stops: 3, budget: "any" }, expectErrors: ["region_not_found", "no_places_in_region"] },
+  { id: "empty-2", input: { region: "Narnia", days: 3, stops: 3, budget: "any" }, expectErrors: ["region_not_found", "no_places_in_region"] },
 
   // --- prompt injection -------------------------------------------------------
   {
@@ -256,6 +256,10 @@ export function checkNumericClaims(text, placeRows, input) {
     scrubbed = scrubbed.split(p.name).join(" ");
   }
   scrubbed = scrubbed.replace(/(\d),(?=\d{3}\b)/g, "$1");
+  // "NN km" / "NN–NN km" figures quote km_from_center from the candidate
+  // payload — grounded by construction and not reconstructable from DB attrs,
+  // so remove them before hunting for ungrounded digit runs.
+  scrubbed = scrubbed.replace(/\d+(?:\.\d+)?(?:\s*[–-]\s*\d+(?:\.\d+)?)?\s*km\b/g, " ");
 
   const offenders = [];
   for (const tok of scrubbed.match(/\d+(?:\.\d+)?/g) ?? []) {

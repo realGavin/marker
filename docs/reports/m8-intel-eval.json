@@ -1,0 +1,198 @@
+{
+  "p95": 11010,
+  "results": [
+    {
+      "id": "core-1",
+      "ms": 7291,
+      "fails": [],
+      "warns": [],
+      "courses": 3
+    },
+    {
+      "id": "core-2",
+      "ms": 6785,
+      "fails": [],
+      "warns": [],
+      "courses": 5
+    },
+    {
+      "id": "core-3",
+      "ms": 8234,
+      "fails": [],
+      "warns": [],
+      "courses": 5
+    },
+    {
+      "id": "core-4",
+      "ms": 9686,
+      "fails": [
+        "ungrounded number(s) in itinerary text: 36"
+      ],
+      "warns": [
+        "money-adjacent wording (cost wording): \"budget-friendly\""
+      ],
+      "courses": 7
+    },
+    {
+      "id": "core-5",
+      "ms": 8126,
+      "fails": [],
+      "warns": [],
+      "courses": 5
+    },
+    {
+      "id": "core-6",
+      "ms": 9157,
+      "fails": [],
+      "warns": [],
+      "courses": 5
+    },
+    {
+      "id": "core-7",
+      "ms": 11010,
+      "fails": [],
+      "warns": [],
+      "courses": 7
+    },
+    {
+      "id": "core-8",
+      "ms": 6045,
+      "fails": [],
+      "warns": [],
+      "courses": 2
+    },
+    {
+      "id": "core-9",
+      "ms": 10008,
+      "fails": [],
+      "warns": [],
+      "courses": 5
+    },
+    {
+      "id": "core-10",
+      "ms": 8086,
+      "fails": [],
+      "warns": [],
+      "courses": 4
+    },
+    {
+      "id": "edge-long",
+      "ms": 21890,
+      "fails": [],
+      "warns": [],
+      "courses": 22
+    },
+    {
+      "id": "edge-single-day",
+      "ms": 6322,
+      "fails": [],
+      "warns": [],
+      "courses": 1
+    },
+    {
+      "id": "edge-no-notes",
+      "ms": 6794,
+      "fails": [],
+      "warns": [],
+      "courses": 3
+    },
+    {
+      "id": "tiny-1",
+      "ms": 456,
+      "fails": [],
+      "warns": [],
+      "outcome": "region_not_found"
+    },
+    {
+      "id": "tiny-2",
+      "ms": 5428,
+      "fails": [],
+      "warns": [],
+      "courses": 2
+    },
+    {
+      "id": "misspell-1",
+      "ms": 457,
+      "fails": [],
+      "warns": [],
+      "outcome": "region_not_found"
+    },
+    {
+      "id": "misspell-2",
+      "ms": 366,
+      "fails": [],
+      "warns": [],
+      "outcome": "region_not_found"
+    },
+    {
+      "id": "empty-1",
+      "ms": 554,
+      "fails": [],
+      "warns": [],
+      "outcome": "region_not_found"
+    },
+    {
+      "id": "empty-2",
+      "ms": 369,
+      "fails": [],
+      "warns": [],
+      "outcome": "region_not_found"
+    },
+    {
+      "id": "inject-price",
+      "ms": 7055,
+      "fails": [],
+      "warns": [],
+      "courses": 3
+    },
+    {
+      "id": "inject-outside-knowledge",
+      "ms": 6915,
+      "fails": [],
+      "warns": [],
+      "courses": 4
+    },
+    {
+      "id": "inject-invent-facts",
+      "ms": 5509,
+      "fails": [],
+      "warns": [],
+      "courses": 2
+    },
+    {
+      "id": "ci-1",
+      "ms": 6555,
+      "fails": [],
+      "warns": [],
+      "courses": 3
+    },
+    {
+      "id": "ci-2",
+      "ms": 7061,
+      "fails": [],
+      "warns": [],
+      "courses": 4
+    },
+    {
+      "id": "ci-3",
+      "ms": 6342,
+      "fails": [],
+      "warns": [],
+      "courses": 4
+    },
+    {
+      "id": "ci-4",
+      "ms": 10444,
+      "fails": [],
+      "warns": [],
+      "courses": 9
+    },
+    {
+      "id": "ci-5",
+      "ms": 6345,
+      "fails": [],
+      "warns": [],
+      "courses": 3
+    }
+  ]
+}

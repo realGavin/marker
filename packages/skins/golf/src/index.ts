@@ -142,10 +142,10 @@ export const golfSkin: Skin = {
     if (!parsed.success) return [];
     const a = parsed.data;
     const chips = (a.setting ?? []).map((s) => SETTING_LABELS[s]);
-    if (a.windMs !== undefined) {
-      if (a.windMs > 6) chips.push("Windy");
-      else if (a.windMs < 4) chips.push("Calm");
-    }
+    // > 4 m/s long-term mean = top ~5% of US courses (median is 2.2) — the
+    // honest bar for "notably windy". No "Calm" chip: nearly everything would
+    // qualify, which tells the user nothing.
+    if (a.windMs !== undefined && a.windMs > 4) chips.push("Windy");
     return chips;
   },
   curatedLists,
