@@ -71,6 +71,9 @@ switch (cmd) {
   case "enrich-wikidata":
     await (await import("./enrich-wikidata.js")).enrichWikidata();
     break;
+  case "enrich-city":
+    await (await import("./enrich-city.js")).enrichCity();
+    break;
   case "report-intel":
     await (await import("./report-intel.js")).reportIntel();
     break;
@@ -101,7 +104,7 @@ switch (cmd) {
     console.log(
       "usage: pnpm etl <extract|transform|report|load|all|" +
         "extract-holes|enrich-holes|enrich-par|extract-holes-geom|enrich-length|" +
-        "enrich-elevation|enrich-setting|enrich-wind|enrich-season|enrich-wikidata|" +
+        "enrich-elevation|enrich-setting|enrich-wind|enrich-season|enrich-wikidata|enrich-city|" +
         "report-intel|pins|seed-lists|embed|describe|icon|scrub|photos|photos-report|photos-upload> " +
         "[--force] [--state=XX] [--limit=N] [--redo-sparse]",
     );

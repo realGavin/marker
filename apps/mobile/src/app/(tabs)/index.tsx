@@ -14,7 +14,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
 import { buildMapStyle } from "../../lib/map-style";
-import { pins, pinsGeoJSON, searchPins, toGeoJSON, type Pin } from "../../lib/pins";
+import { pins, pinsGeoJSON, searchAll, toGeoJSON, type Pin, type SearchResult } from "../../lib/pins";
 import { useMyLogs, useProfile, useUpsertLog, useDeleteLog, usePlace } from "../../lib/data";
 import { PlacePhoto } from "../../ui/PlacePhoto";
 
@@ -40,7 +40,7 @@ export default function MapScreen() {
   const { data: profile } = useProfile();
   const home = useMemo(() => regionCenter(profile?.home_region), [profile?.home_region]);
   const mapStyle = useMemo(buildMapStyle, []);
-  const results = useMemo(() => searchPins(query), [query]);
+  const results = useMemo(() => searchAll(query, { tags: skin.pinFilters }), [query]);
   const { data: logs } = useMyLogs();
   // multi-select filters: OR within a group, AND across groups
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -140,9 +140,20 @@ export default function MapScreen() {
   const flyTo = (lng: number, lat: number, zoom = 13) =>
     camera.current?.flyTo({ center: [lng, lat], zoom, duration: 800 });
 
-  const pickResult = (p: Pin) => {
-    setQuery("");
-    flyTo(p.lng, p.lat);
+  const pickResult = (r: SearchResult) => {
+    if (r.kind === "place") {
+      setQuery("");
+      flyTo(r.pin.lng, r.pin.lat);
+    } else if (r.kind === "city") {
+      setQuery("");
+      flyTo(r.lng, r.lat, 10);
+    } else if (r.kind === "region") {
+      setQuery("");
+      flyTo(r.lng, r.lat, 6);
+    } else {
+      setSelected((prev) => new Set(prev).add(r.key));
+      setQuery("");
+    }
   };
 
   const nearMe = async () => {
@@ -336,13 +347,54 @@ export default function MapScreen() {
             style={styles.results}
             keyboardShouldPersistTaps="handled"
             data={results}
-            keyExtractor={(p) => p.slug}
-            renderItem={({ item }) => (
-              <Pressable style={styles.resultRow} onPress={() => pickResult(item)}>
-                <Text style={type.body} numberOfLines={1}>{item.name}</Text>
-                <Text style={type.caption}>{[item.city, item.region].filter(Boolean).join(", ")}</Text>
-              </Pressable>
-            )}
+            keyExtractor={(r) =>
+              r.kind === "place"
+                ? `place-${r.pin.slug}`
+                : r.kind === "city"
+                  ? `city-${r.city}-${r.region}`
+                  : r.kind === "region"
+                    ? `region-${r.region}`
+                    : `tag-${r.key}`
+            }
+            renderItem={({ item }) => {
+              if (item.kind === "place") {
+                return (
+                  <Pressable style={styles.resultRow} onPress={() => pickResult(item)}>
+                    <Text style={type.body} numberOfLines={1}>{item.pin.name}</Text>
+                    <Text style={type.caption}>{[item.pin.city, item.pin.region].filter(Boolean).join(", ")}</Text>
+                  </Pressable>
+                );
+              }
+              if (item.kind === "city") {
+                return (
+                  <Pressable style={[styles.resultRow, styles.resultRowBetween]} onPress={() => pickResult(item)}>
+                    <View style={styles.resultRowLeft}>
+                      <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
+                      <Text style={type.body} numberOfLines={1}>{item.city}, {item.region}</Text>
+                    </View>
+                  </Pressable>
+                );
+              }
+              if (item.kind === "region") {
+                return (
+                  <Pressable style={[styles.resultRow, styles.resultRowBetween]} onPress={() => pickResult(item)}>
+                    <View style={styles.resultRowLeft}>
+                      <Ionicons name="flag-outline" size={16} color={colors.textSecondary} />
+                      <Text style={type.body} numberOfLines={1}>{item.regionName}</Text>
+                    </View>
+                  </Pressable>
+                );
+              }
+              return (
+                <Pressable style={[styles.resultRow, styles.resultRowBetween]} onPress={() => pickResult(item)}>
+                  <View style={styles.resultRowLeft}>
+                    <Ionicons name="funnel-outline" size={16} color={colors.textSecondary} />
+                    <Text style={type.body} numberOfLines={1}>{item.label}</Text>
+                  </View>
+                  <Text style={type.caption}>{item.count} {skin.vocab.places}</Text>
+                </Pressable>
+              );
+            }}
           />
         )}
       </View>
@@ -493,6 +545,18 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "#E7E7E3",
+  },
+  resultRowBetween: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+  },
+  resultRowLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    flexShrink: 1,
   },
   preview: {
     position: "absolute",

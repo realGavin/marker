@@ -59,11 +59,15 @@ const SETTING_LABELS: Record<NonNullable<GolfAttributes["setting"]>[number], str
 
 /**
  * Terrain summary split into its display parts: a word every course gets, and
- * a metre range only meaningful ground gets. Flat ground gets no number.
+ * a rise only meaningful ground gets. Flat ground gets no number.
+ * Stored in metres (the source rasters are metric); shown in feet, because
+ * US golfers read elevation in feet. Cutoffs are the metric ones the pin tags
+ * and planner prompt use — 15 m and 40 m — so every surface agrees.
  */
 function elevationParts(m: number): { word: string; range: string | null } {
   if (m < 15) return { word: "Flat", range: null };
-  return { word: m <= 40 ? "Rolling" : "Hilly", range: `${m} m` };
+  const ft = Math.round((m * 3.28084) / 5) * 5; // nearest 5 ft: the input is an estimate
+  return { word: m <= 40 ? "Rolling" : "Hilly", range: `${ft} ft` };
 }
 
 /** "Rolling · 28 m" style terrain summary; flat ground gets no number. */

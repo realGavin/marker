@@ -52,6 +52,13 @@ export interface PlaceRow {
     seasonMonths?: [number, number];
     /** Display-grade. Comma-joined architect name(s) from Wikidata (P84/P287), filled only where absent. */
     designer?: string;
+    /**
+     * True when r.city was backfilled by enrich-city.ts (nearest US Census
+     * Gazetteer incorporated place/CDP in the same state, within 25km)
+     * rather than sourced directly — lets the UI label it "approx" instead
+     * of presenting a nearest-neighbor guess as a stated fact.
+     */
+    cityApprox?: boolean;
   };
   source: "osm" | "manual";
   source_ref: string; // e.g. "way/12345" or "manual/<slug>"
