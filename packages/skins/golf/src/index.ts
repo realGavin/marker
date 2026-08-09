@@ -222,6 +222,17 @@ export const golfSkin: Skin = {
   // pass. Coverage is uneven by design (open data is sparse): the architect
   // prunes any chip whose tag covers under 10% of pins before ship, so a
   // filter never looks broken by returning almost nothing.
+  // What a golfer would actually flag after a round. Keys are stored in the
+  // database and must never change; labels are display-only.
+  conditionKinds: [
+    { key: "greens", label: "Greens" },
+    { key: "bunkers", label: "Bunkers" },
+    { key: "fairways", label: "Fairways" },
+    { key: "rough", label: "Rough" },
+    { key: "cart_paths", label: "Cart paths" },
+    { key: "pace", label: "Pace of play" },
+    { key: "drainage", label: "Wet / drainage" },
+  ],
   pinFilterGroups: [
     { key: "holes", label: "Holes" },
     { key: "access", label: "Access" },

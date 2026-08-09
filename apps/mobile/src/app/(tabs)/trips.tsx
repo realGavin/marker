@@ -13,28 +13,63 @@ import {
 import { useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Haptics from "expo-haptics";
 import type { TripTemplate } from "@marker/core";
 import { skin } from "../../skin";
-import { colors, spacing, type } from "../../ui/theme";
+import { colors, radii, spacing, type } from "../../ui/theme";
 import { searchPins } from "../../lib/pins";
 import { useAuth } from "../../providers/auth";
 import {
   fetchPlaceBySlug,
+  useAdoptTrip,
+  useBlockUser,
   useCreateTrip,
   useDeleteTrip,
   useDeleteVisitTime,
   useJoinTrip,
   useMyLogs,
   usePlanTrip,
+  usePublishedTrips,
+  usePublishTrip,
+  useReportContent,
   useTemplatePlaces,
   useTripPlans,
+  useUnpublishTrip,
+  useUnvoteTrip,
   useUpdateTrip,
   useUpsertLog,
   useVisitTimes,
+  useVoteTrip,
+  type PublishedTrip,
   type TripItinerary,
   type TripPlan,
 } from "../../lib/data";
 import { cancelVisitReminders, reconcileReminders } from "../../lib/reminders";
+
+const COMMUNITY_TERMS_KEY = "marker.communityTermsAcceptedAt";
+
+/** Shown once before a user's first publish; agreement is then persisted. */
+async function ensureCommunityTermsAccepted(): Promise<boolean> {
+  const accepted = await AsyncStorage.getItem(COMMUNITY_TERMS_KEY);
+  if (accepted) return true;
+  return new Promise((resolve) => {
+    Alert.alert(
+      "Community guidelines",
+      "Publishing shares a trip with everyone. Keep it useful and respectful — no objectionable content. Reports are reviewed within 24 hours, and accounts that abuse the community are removed.",
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+        {
+          text: "I agree",
+          onPress: async () => {
+            await AsyncStorage.setItem(COMMUNITY_TERMS_KEY, new Date().toISOString());
+            resolve(true);
+          },
+        },
+      ],
+    );
+  });
+}
 
 /** Labeled +/- numeric control — friendlier than a bare keyboard field. */
 function Stepper({
@@ -240,6 +275,8 @@ export default function TripsScreen() {
 
         {result && <Itinerary itinerary={result} title={region.trim() || undefined} />}
 
+        <CommunityTripsSection />
+
         <Text style={[type.heading, { marginTop: spacing.xl }]}>Trip ideas</Text>
         <Text style={[type.caption, { marginBottom: spacing.sm }]}>
           Editor-built trips, free for everyone.
@@ -377,14 +414,176 @@ function Itinerary({
   );
 }
 
+/** Trips other users have published; renders nothing when the feed is empty. */
+function CommunityTripsSection() {
+  const { data: trips } = usePublishedTrips();
+  if (!trips || trips.length === 0) return null;
+  // already ordered server-side (editor_pick, then votes)
+  return (
+    <View style={{ marginTop: spacing.xl }}>
+      <Text style={type.heading}>Community trips</Text>
+      <Text style={[type.caption, { marginBottom: spacing.sm }]}>Published by other members.</Text>
+      {trips.map((t) => (
+        <CommunityTripCard key={t.id} trip={t} />
+      ))}
+    </View>
+  );
+}
+
+function CommunityTripCard({ trip }: { trip: PublishedTrip }) {
+  const { session } = useAuth();
+  const voteTrip = useVoteTrip();
+  const unvoteTrip = useUnvoteTrip();
+  const adoptTrip = useAdoptTrip();
+  const reportContent = useReportContent();
+  const blockUser = useBlockUser();
+  const [voted, setVoted] = useState(false);
+  const [adopted, setAdopted] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const toggleVote = () => {
+    Haptics.selectionAsync().catch(() => {});
+    const next = !voted;
+    setVoted(next);
+    if (next) voteTrip.mutate(trip.id);
+    else unvoteTrip.mutate(trip.id);
+  };
+
+  const adopt = async () => {
+    try {
+      await adoptTrip.mutateAsync(trip.id);
+      setAdopted(true);
+      Alert.alert("Added", "This trip is now yours to edit under Your trips.");
+    } catch {
+      Alert.alert("Couldn't add", "Please try again.");
+    }
+  };
+
+  const report = () => {
+    setMenuOpen(false);
+    Alert.prompt(
+      "Report this trip",
+      "Briefly tell us what's wrong",
+      async (reason) => {
+        try {
+          await reportContent.mutateAsync({
+            targetType: "trip",
+            targetId: trip.id,
+            reason: reason?.trim() || "unspecified",
+          });
+          Alert.alert("Reported", "Thanks — we review reports within 24 hours.");
+        } catch {
+          Alert.alert("Couldn't report", "Please try again.");
+        }
+      },
+      "plain-text",
+    );
+  };
+
+  const block = () => {
+    setMenuOpen(false);
+    Alert.alert(`Block @${trip.author_handle ?? "this member"}?`, "You won't see their published trips anymore.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Block", style: "destructive", onPress: () => blockUser.mutate(trip.author_id) },
+    ]);
+  };
+
+  return (
+    <View style={styles.templateCard}>
+      <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
+        <View style={{ flex: 1 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+            <Text style={type.heading} numberOfLines={1}>{trip.title}</Text>
+            {trip.editor_pick && (
+              <View style={styles.editorPickPill}>
+                <Text style={styles.editorPickText}>Editor's pick</Text>
+              </View>
+            )}
+          </View>
+          <Text style={type.caption}>@{trip.author_handle ?? "member"}</Text>
+          <Text style={type.caption}>{trip.days} days · {trip.stops} stops</Text>
+        </View>
+        <Pressable hitSlop={8} onPress={() => setMenuOpen(!menuOpen)}>
+          <Ionicons name="ellipsis-horizontal" size={18} color={colors.textSecondary} />
+        </Pressable>
+      </View>
+      {menuOpen && (
+        <View style={styles.tripActions}>
+          <Pressable style={styles.tripAction} onPress={report}>
+            <Ionicons name="flag-outline" size={15} color={colors.textSecondary} />
+            <Text style={styles.tripActionText}>Report</Text>
+          </Pressable>
+          {trip.author_id !== session?.user.id && (
+            <Pressable style={styles.tripAction} onPress={block}>
+              <Ionicons name="person-remove-outline" size={15} color="#B4552D" />
+              <Text style={[styles.tripActionText, { color: "#B4552D" }]}>Block author</Text>
+            </Pressable>
+          )}
+        </View>
+      )}
+      {trip.summary ? <Text style={[type.caption, { marginTop: spacing.xs }]}>{trip.summary}</Text> : null}
+      <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+        <Pressable style={[styles.voteButton, voted && styles.voteButtonActive]} onPress={toggleVote}>
+          <Ionicons name="triangle" size={12} color={voted ? "#FFF" : colors.primary} />
+          <Text style={[styles.voteText, voted && { color: "#FFF" }]}>{trip.votes}</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.generate, { flex: 1, height: 42 }, (adopted || adoptTrip.isPending) && { opacity: 0.7 }]}
+          disabled={adopted || adoptTrip.isPending}
+          onPress={adopt}
+        >
+          <Text style={[styles.generateText, { fontSize: 14 }]}>
+            {adopted ? "Added to your trips ✓" : "Make it my trip"}
+          </Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 /** A saved trip: viewable, editable, and shareable with friends by code. */
 function TripCard({ plan }: { plan: TripPlan }) {
   const { session } = useAuth();
   const deleteTrip = useDeleteTrip();
+  const publishTrip = usePublishTrip();
+  const unpublishTrip = useUnpublishTrip();
+  const { data: publishedTrips } = usePublishedTrips();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const isOwner = plan.user_id === session?.user.id;
   const title = plan.title ?? plan.request.region;
+  const isPublished = (publishedTrips ?? []).some((t) => t.id === plan.id);
+
+  const publish = async () => {
+    const ok = await ensureCommunityTermsAccepted();
+    if (!ok) return;
+    Alert.prompt(
+      "Publish this trip",
+      "Give it a title",
+      (t) => {
+        const publishTitle = t?.trim() || title;
+        Alert.prompt(
+          "One-line summary",
+          "What makes this trip worth trying?",
+          async (s) => {
+            try {
+              await publishTrip.mutateAsync({ tripId: plan.id, title: publishTitle, summary: s?.trim() ?? "" });
+            } catch (e) {
+              const code = (e as Error).message;
+              if (code === "invalid_title") {
+                Alert.alert("Couldn't publish", "Give the trip a title first.");
+              } else {
+                Alert.alert("Couldn't publish", "Please try again.");
+              }
+            }
+          },
+          "plain-text",
+        );
+      },
+      "plain-text",
+      title,
+    );
+  };
 
   const invite = () => {
     Alert.alert(
@@ -433,6 +632,20 @@ function TripCard({ plan }: { plan: TripPlan }) {
               <Ionicons name="person-add-outline" size={16} color={colors.primary} />
               <Text style={styles.tripActionText}>Invite</Text>
             </Pressable>
+            {isOwner && (
+              <Pressable
+                style={styles.tripAction}
+                disabled={publishTrip.isPending || unpublishTrip.isPending}
+                onPress={() => (isPublished ? unpublishTrip.mutate(plan.id) : publish())}
+              >
+                <Ionicons
+                  name={isPublished ? "cloud-offline-outline" : "cloud-upload-outline"}
+                  size={16}
+                  color={colors.primary}
+                />
+                <Text style={styles.tripActionText}>{isPublished ? "Unpublish" : "Publish"}</Text>
+              </Pressable>
+            )}
             {isOwner && (
               <Pressable
                 style={styles.tripAction}
@@ -825,6 +1038,26 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   sharedBadgeText: { fontSize: 10, fontWeight: "800", color: "#FFF", letterSpacing: 0.5 },
+  editorPickPill: {
+    backgroundColor: colors.accentFill,
+    borderRadius: radii.chip,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  editorPickText: { fontSize: 10, fontWeight: "800", color: "#FFF", letterSpacing: 0.5 },
+  voteButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    borderRadius: radii.control,
+    paddingHorizontal: spacing.sm,
+    height: 42,
+    backgroundColor: colors.surface,
+  },
+  voteButtonActive: { backgroundColor: colors.primary },
+  voteText: { fontSize: 14, fontWeight: "700", color: colors.primary },
   tripActions: {
     flexDirection: "row",
     gap: spacing.lg,

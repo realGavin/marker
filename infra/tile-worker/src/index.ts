@@ -4,7 +4,7 @@
  * most requests never touch R2, keeping cost flat regardless of user count.
  */
 import { PMTiles, ResolvedValueCache, type RangeResponse, type Source } from "pmtiles";
-import { PRIVACY_HTML, SUPPORT_HTML } from "./privacy";
+import { PRIVACY_HTML, SUPPORT_HTML, TERMS_HTML } from "./privacy";
 
 interface Env {
   BUCKET: R2Bucket;
@@ -49,8 +49,12 @@ export default {
     if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
     const url = new URL(request.url);
 
-    if (url.pathname === "/privacy" || url.pathname === "/support") {
-      return new Response(url.pathname === "/privacy" ? PRIVACY_HTML : SUPPORT_HTML, {
+    if (url.pathname === "/privacy" || url.pathname === "/support" || url.pathname === "/terms") {
+      const html =
+        url.pathname === "/privacy" ? PRIVACY_HTML :
+        url.pathname === "/support" ? SUPPORT_HTML :
+        TERMS_HTML;
+      return new Response(html, {
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=3600" },
       });
     }

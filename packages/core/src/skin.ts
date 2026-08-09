@@ -179,6 +179,13 @@ export interface Skin {
   tripTemplates: TripTemplate[];
   /** Welcome carousel shown before sign-in. */
   introSlides: IntroSlide[];
+  /**
+   * Categories a visitor can flag about a place's CURRENT state (e.g. a hiking
+   * niche might offer trail washout, blowdowns, bridge out). `key` is stored in
+   * the database and must be stable; `label` is display-only. The engine
+   * renders these generically and never interprets them.
+   */
+  conditionKinds: Array<{ key: string; label: string }>;
   /** Filters offered in the map's filter menu; keys match pin-data tags. */
   pinFilters: PinFilter[];
   /** Section headers for pinFilters, in display order. */

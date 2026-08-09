@@ -485,6 +485,280 @@ export function useDeleteVisitTime() {
   });
 }
 
+export interface PlaceRatingStats {
+  place_id: string;
+  avg: number; // 0-20 scale, matching place_logs.rating
+  rating_count: number;
+}
+
+/** Community average rating for a place; absent until >=3 ratings exist. */
+export function usePlaceRating(placeId: string | undefined) {
+  return useQuery({
+    queryKey: ["place-rating", placeId],
+    enabled: !!placeId,
+    queryFn: async (): Promise<PlaceRatingStats | null> => {
+      try {
+        const { data, error } = await sb()
+          .from("place_rating_stats")
+          .select("place_id,avg,rating_count")
+          .eq("place_id", placeId)
+          .maybeSingle();
+        if (error) throw error;
+        return data as PlaceRatingStats | null;
+      } catch {
+        return null; // hide rather than error
+      }
+    },
+  });
+}
+
+export interface ConditionSummary {
+  place_id: string;
+  kind: string;
+  reporters: number;
+  latest_note: string | null;
+  latest_at: string;
+  expires_at: string;
+  /** id of the report latest_note/latest_at came from; the endorse target. */
+  latest_report_id: string;
+}
+
+/** Active, corroborated condition reports for a place (>=2 reporters, unexpired). */
+export function useConditions(placeId: string | undefined) {
+  return useQuery({
+    queryKey: ["conditions", placeId],
+    enabled: !!placeId,
+    queryFn: async (): Promise<ConditionSummary[]> => {
+      try {
+        const { data, error } = await sb()
+          .from("condition_summary")
+          .select("place_id,kind,reporters,latest_note,latest_at,expires_at,latest_report_id")
+          .eq("place_id", placeId)
+          .order("reporters", { ascending: false });
+        if (error) throw error;
+        return (data ?? []) as ConditionSummary[];
+      } catch {
+        return [];
+      }
+    },
+  });
+}
+
+export function useReportCondition() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { placeId: string; kind: string; note?: string | null }) => {
+      const { data, error } = await sb().rpc("report_condition", {
+        place: input.placeId,
+        kind: input.kind,
+        note: input.note ?? null,
+      });
+      if (error) throw error;
+      return data as string;
+    },
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ["conditions", v.placeId] }),
+  });
+}
+
+export function useEndorseCondition() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { placeId: string; reportId: string }) => {
+      const { error } = await sb().rpc("endorse_condition", { report: input.reportId });
+      if (error) throw error;
+    },
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ["conditions", v.placeId] }),
+  });
+}
+
+export interface PublishedTrip {
+  id: string;
+  title: string;
+  summary: string | null;
+  author_handle: string | null;
+  author_id: string;
+  days: number;
+  stops: number;
+  votes: number;
+  editor_pick: boolean;
+  published_at: string;
+  itinerary: TripItinerary;
+}
+
+/**
+ * Trips other users have published to the community feed. published_trips is
+ * granted to authenticated only (its block filter keys off auth.uid(), so an
+ * anon read would silently bypass every block) — gated on session for that
+ * reason, on top of the usual hide-on-error.
+ */
+export function usePublishedTrips() {
+  const { session } = useAuth();
+  return useQuery({
+    queryKey: ["published-trips"],
+    enabled: !!session,
+    queryFn: async (): Promise<PublishedTrip[]> => {
+      try {
+        const { data, error } = await sb()
+          .from("published_trips")
+          .select("id,title,summary,author_handle,author_id,days,stops,votes,editor_pick,published_at,itinerary")
+          .order("editor_pick", { ascending: false })
+          .order("votes", { ascending: false })
+          .limit(50);
+        if (error) throw error;
+        return (data ?? []) as PublishedTrip[];
+      } catch {
+        return [];
+      }
+    },
+  });
+}
+
+export function usePublishTrip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { tripId: string; title: string; summary: string }) => {
+      const { error } = await sb().rpc("publish_trip", {
+        trip: input.tripId,
+        title: input.title,
+        summary: input.summary,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["published-trips"] }),
+  });
+}
+
+export function useUnpublishTrip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (tripId: string) => {
+      const { error } = await sb().rpc("unpublish_trip", { trip: tripId });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["published-trips"] }),
+  });
+}
+
+/** Optimistic +1; rolled back on error, reconciled once the server responds. */
+export function useVoteTrip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (tripId: string) => {
+      const { error } = await sb().rpc("vote_trip", { trip: tripId });
+      if (error) throw error;
+    },
+    onMutate: async (tripId: string) => {
+      await qc.cancelQueries({ queryKey: ["published-trips"] });
+      const prev = qc.getQueryData<PublishedTrip[]>(["published-trips"]);
+      qc.setQueryData<PublishedTrip[]>(["published-trips"], (old) =>
+        (old ?? []).map((t) => (t.id === tripId ? { ...t, votes: t.votes + 1 } : t)),
+      );
+      return { prev };
+    },
+    onError: (_err, _tripId, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["published-trips"], ctx.prev);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["published-trips"] }),
+  });
+}
+
+export function useUnvoteTrip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (tripId: string) => {
+      const { error } = await sb().rpc("unvote_trip", { trip: tripId });
+      if (error) throw error;
+    },
+    onMutate: async (tripId: string) => {
+      await qc.cancelQueries({ queryKey: ["published-trips"] });
+      const prev = qc.getQueryData<PublishedTrip[]>(["published-trips"]);
+      qc.setQueryData<PublishedTrip[]>(["published-trips"], (old) =>
+        (old ?? []).map((t) => (t.id === tripId ? { ...t, votes: Math.max(0, t.votes - 1) } : t)),
+      );
+      return { prev };
+    },
+    onError: (_err, _tripId, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["published-trips"], ctx.prev);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["published-trips"] }),
+  });
+}
+
+/** Copies a published trip into the caller's own editable trips. */
+export function useAdoptTrip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (tripId: string) => {
+      const { data, error } = await sb().rpc("adopt_trip", { trip: tripId });
+      if (error) throw error;
+      return data as string;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["trips"] }),
+  });
+}
+
+export function useReportContent() {
+  return useMutation({
+    mutationFn: async (input: { targetType: "trip" | "condition_report"; targetId: string; reason: string }) => {
+      const { error } = await sb().rpc("report_content", {
+        target_type: input.targetType,
+        target_id: input.targetId,
+        reason: input.reason,
+      });
+      if (error) throw error;
+    },
+  });
+}
+
+export function useBlockUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (targetUserId: string) => {
+      const { error } = await sb().rpc("block_user", { target: targetUserId });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["published-trips"] }),
+  });
+}
+
+export interface BlockedAccount {
+  blocked_id: string;
+  handle: string | null;
+  created_at: string;
+}
+
+/** The caller's own blocked accounts, so they can be reviewed and undone. */
+export function useMyBlocks() {
+  const { session } = useAuth();
+  return useQuery({
+    queryKey: ["my-blocks", session?.user.id],
+    enabled: !!session,
+    queryFn: async (): Promise<BlockedAccount[]> => {
+      try {
+        const { data, error } = await sb().rpc("my_blocks");
+        if (error) throw error;
+        return (data ?? []) as BlockedAccount[];
+      } catch {
+        return []; // hide rather than error (also covers not-yet-deployed RPC)
+      }
+    },
+  });
+}
+
+export function useUnblockUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (targetUserId: string) => {
+      const { error } = await sb().rpc("unblock_user", { target: targetUserId });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["my-blocks"] });
+      qc.invalidateQueries({ queryKey: ["published-trips"] });
+    },
+  });
+}
+
 /** The caller's collector rank among all users (see my_rank in the DB). */
 export function useMyRank() {
   const { session } = useAuth();

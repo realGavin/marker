@@ -83,6 +83,26 @@ conservative, tick **Coarse Location** as well (App Functionality, linked, no
 tracking); it costs nothing on the public label. Your call — say the word and
 I'll note it as decided.
 
+### User-generated content (Guideline 1.2)
+
+The app now includes published trips, course condition reports, and user ratings
+(user-generated content). Apple Guideline 1.2 requires evidence of moderation:
+
+- **In-app reporting:** every piece of user content (published trips, condition
+  reports) carries a Report action, which writes to a `content_reports` table.
+- **User blocking:** any user can block an author from that author's content;
+  blocked authors' trips and reports are filtered out of every community view
+  for the blocker, enforced in the database, not just the UI.
+- **Terms acceptance:** users must accept the Terms of Use (linked below) before
+  their first publish.
+- **24-hour commitment:** reports are reviewed and actioned — content deleted or
+  the account suspended — within 24 hours. At current scale the operator reviews
+  reports directly in the database via a documented SQL runbook
+  (`docs/moderation-runbook.md`); there is no separate admin app.
+
+The 24-hour SLA satisfies Guideline 1.2's "appropriate action" and "reviews
+reports" language.
+
 ---
 
 ## 3. Other required fields on the version page
@@ -91,6 +111,7 @@ I'll note it as decided.
 |---|---|
 | Support URL | `https://marker-tiles.shuozeng21.workers.dev/support` |
 | Privacy Policy URL | `https://marker-tiles.shuozeng21.workers.dev/privacy` |
+| EULA | `https://marker-tiles.shuozeng21.workers.dev/terms` |
 | Marketing URL | leave blank (optional) |
 | Copyright | `2026 Gavin Zeng` |
 | Version | `1.0.0` |

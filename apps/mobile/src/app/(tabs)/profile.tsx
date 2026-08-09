@@ -7,7 +7,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
 import { useAuth } from "../../providers/auth";
 import { usePurchases } from "../../providers/purchases";
-import { useMyLogs, useMyRank, useProfile } from "../../lib/data";
+import { useMyBlocks, useMyLogs, useMyRank, useProfile } from "../../lib/data";
 import { ShareCard } from "../../ui/ShareCard";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
@@ -23,6 +23,7 @@ export default function ProfileScreen() {
 
   const handle = profile?.handle ?? session?.user.email?.split("@")[0] ?? null;
   const { data: rank } = useMyRank();
+  const { data: blocks } = useMyBlocks();
   // only wear a badge once there's a collection behind it
   const badge = rank && rank.visited_count >= 3 ? `TOP ${rank.top_percent}%` : null;
 
@@ -98,6 +99,16 @@ export default function ProfileScreen() {
           </Pressable>
         )}
       </View>
+
+      {blocks && blocks.length > 0 && (
+        <Pressable style={styles.blockedRow} onPress={() => router.push("/blocked")}>
+          <Text style={type.caption}>Blocked accounts</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+            <Text style={[type.caption, { color: colors.textSecondary }]}>{blocks.length}</Text>
+            <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
+          </View>
+        </Pressable>
+      )}
 
       <Pressable
         style={styles.signOut}
@@ -207,5 +218,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   inviteText: { color: colors.primary, fontSize: 15, fontWeight: "700" },
+  blockedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: spacing.lg,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surface,
+  },
   signOut: { alignItems: "center", marginTop: spacing.xl },
 });

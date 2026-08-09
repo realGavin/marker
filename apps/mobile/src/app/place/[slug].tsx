@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -24,15 +25,37 @@ import {
   useLists,
   useAddToList,
   useCreateList,
+  usePlaceRating,
+  useConditions,
+  useReportCondition,
+  useEndorseCondition,
+  useReportContent,
+  type ConditionSummary,
 } from "../../lib/data";
 import { useRouter } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { PlacePhoto } from "../../ui/PlacePhoto";
+import { PostVisitSheet } from "../../ui/PostVisitSheet";
 import { scheduleVisitReminders, cancelVisitReminders } from "../../lib/reminders";
 import { useVisitTimes, useAddVisitTime, useDeleteVisitTime } from "../../lib/data";
 
 /** Rating stored as 0–20 (half steps); shown as 0–10. */
 const shownRating = (r: number) => (r / 2).toFixed(r % 2 ? 1 : 0);
+
+/** e.g. "4 days ago"; falls back gracefully for very fresh reports. */
+function relativeAge(iso: string): string {
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 60) return mins <= 1 ? "just now" : `${mins} minutes ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/** Always render condition labels from the skin — the engine never names one. */
+function conditionLabel(kind: string): string {
+  return skin.conditionKinds.find((k) => k.key === kind)?.label ?? kind;
+}
 
 type Fact = ReturnType<typeof skin.attributeFacts>[number];
 /** A fact the skin marked for the instrument strip by giving it a `cluster`. */
@@ -68,6 +91,7 @@ export default function PlaceScreen() {
   const [note, setNote] = useState("");
   const [rating, setRating] = useState<number | null>(null);
   const [noteSaved, setNoteSaved] = useState(false);
+  const [postVisitOpen, setPostVisitOpen] = useState(false);
 
   useEffect(() => {
     setNote(myLog?.note ?? "");
@@ -125,10 +149,17 @@ export default function PlaceScreen() {
   const setStatus = (next: "visited" | "want") => {
     if (status === next) {
       remove.mutate(place.id);
-    } else {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      upsert.mutate({ placeId: place.id, status: next, rating, note: note || null });
+      return;
     }
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    upsert.mutate(
+      { placeId: place.id, status: next, rating, note: note || null },
+      {
+        onSuccess: () => {
+          if (next === "visited" && rating == null) setPostVisitOpen(true);
+        },
+      },
+    );
   };
 
   const saveDetails = (r: number | null) => {
@@ -346,6 +377,8 @@ export default function PlaceScreen() {
           </View>
         )}
 
+        <CommunityPulse placeId={place.id} />
+
         <View style={styles.card}>
           <Text style={type.body}>{place.description ?? "Description coming soon."}</Text>
         </View>
@@ -377,7 +410,216 @@ export default function PlaceScreen() {
           </View>
         )}
       </ScrollView>
+      <PostVisitSheet
+        visible={postVisitOpen}
+        placeId={place.id}
+        note={note}
+        onClose={() => setPostVisitOpen(false)}
+      />
     </>
+  );
+}
+
+/**
+ * Community rating + condition advisories, right after the instrument
+ * cluster. Every piece hides on its own when there's no data — this whole
+ * block can render as just the always-on "Report condition" row.
+ */
+function CommunityPulse({ placeId }: { placeId: string }) {
+  const { data: rating } = usePlaceRating(placeId);
+  const { data: conditions } = useConditions(placeId);
+  const [openCondition, setOpenCondition] = useState<ConditionSummary | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
+
+  return (
+    <View style={styles.card}>
+      {rating && (
+        <View style={styles.pulseRating}>
+          <Text style={type.numeral}>{(rating.avg / 2).toFixed(1)}</Text>
+          <Text style={type.label}>{rating.rating_count} ratings</Text>
+        </View>
+      )}
+      {conditions && conditions.length > 0 && (
+        <View style={styles.chipRow}>
+          {conditions.map((c) => (
+            <Pressable key={c.kind} style={styles.conditionChip} onPress={() => setOpenCondition(c)}>
+              <Text style={[type.label, { color: colors.accent }]}>
+                {conditionLabel(c.kind)} · {c.reporters}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
+      <Pressable style={styles.addToList} onPress={() => setReportOpen(true)}>
+        <Ionicons name="megaphone-outline" size={17} color={colors.primary} />
+        <Text style={styles.addToListText}>Report condition</Text>
+      </Pressable>
+
+      <ConditionDetailSheet condition={openCondition} placeId={placeId} onClose={() => setOpenCondition(null)} />
+      <ReportConditionSheet visible={reportOpen} placeId={placeId} onClose={() => setReportOpen(false)} />
+    </View>
+  );
+}
+
+function ConditionDetailSheet({
+  condition,
+  placeId,
+  onClose,
+}: {
+  condition: ConditionSummary | null;
+  placeId: string;
+  onClose: () => void;
+}) {
+  const endorse = useEndorseCondition();
+  const reportContent = useReportContent();
+  // "done" renews the report's freshness — it does not raise the reporter
+  // count, which only grows from independent report_condition calls.
+  // "own" is a real, expected state (your own report put the row here), not
+  // an error — the endorse RPC rejects it with own_report.
+  const [endorseState, setEndorseState] = useState<"idle" | "done" | "own">("idle");
+
+  useEffect(() => setEndorseState("idle"), [condition?.kind]);
+
+  if (!condition) return null;
+
+  const doEndorse = () => {
+    Haptics.selectionAsync().catch(() => {});
+    endorse.mutate(
+      { placeId, reportId: condition.latest_report_id },
+      {
+        onSuccess: () => setEndorseState("done"),
+        onError: (err) => {
+          if ((err as Error).message?.includes("own_report")) setEndorseState("own");
+          // any other failure: stay idle, so a retap just tries again
+        },
+      },
+    );
+  };
+
+  const doReport = () => {
+    Alert.alert("Report this condition note?", "We review reports within 24 hours.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Report",
+        style: "destructive",
+        onPress: () =>
+          reportContent.mutate({
+            targetType: "condition_report",
+            targetId: condition.latest_report_id,
+            reason: "inappropriate condition report",
+          }),
+      },
+    ]);
+  };
+
+  const endorseLabel =
+    endorseState === "done" ? "Still there — thanks" : endorseState === "own" ? "That's your report" : "I saw this too";
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.sheetBackdrop} onPress={onClose} />
+      <View style={styles.sheet}>
+        <Text style={type.heading}>{conditionLabel(condition.kind)}</Text>
+        <Text style={[type.caption, { marginTop: spacing.xs }]}>
+          {relativeAge(condition.latest_at)} · {condition.reporters} reports
+        </Text>
+        {condition.latest_note ? (
+          <Text style={[type.body, { marginTop: spacing.sm }]}>{condition.latest_note}</Text>
+        ) : null}
+        <Pressable
+          style={[styles.button, (endorseState !== "idle" || endorse.isPending) && { opacity: 0.6 }]}
+          disabled={endorseState !== "idle" || endorse.isPending}
+          onPress={doEndorse}
+        >
+          <Text style={styles.buttonText}>{endorseLabel}</Text>
+        </Pressable>
+        <Pressable style={{ marginTop: spacing.md, alignSelf: "center" }} onPress={doReport} hitSlop={8}>
+          <Text style={[type.caption, { color: "#B4552D" }]}>Report</Text>
+        </Pressable>
+      </View>
+    </Modal>
+  );
+}
+
+function ReportConditionSheet({
+  visible,
+  placeId,
+  onClose,
+}: {
+  visible: boolean;
+  placeId: string;
+  onClose: () => void;
+}) {
+  const reportCondition = useReportCondition();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    if (visible) {
+      setSelected(new Set());
+      setNote("");
+    }
+  }, [visible]);
+
+  if (!visible) return null;
+
+  const toggle = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const submit = async () => {
+    try {
+      for (const key of selected) {
+        await reportCondition.mutateAsync({ placeId, kind: key, note: note.trim() || null });
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      onClose();
+    } catch {
+      Alert.alert("Couldn't save", "Please try again.");
+    }
+  };
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.sheetBackdrop} onPress={onClose} />
+      <View style={styles.sheet}>
+        <Text style={type.heading}>Report condition</Text>
+        <View style={[styles.chipRow, { marginTop: spacing.sm }]}>
+          {skin.conditionKinds.map((k) => (
+            <Pressable
+              key={k.key}
+              style={[styles.chip, selected.has(k.key) && styles.chipActive]}
+              onPress={() => toggle(k.key)}
+            >
+              <Text style={[type.label, { color: selected.has(k.key) ? "#FFF" : colors.textPrimary }]}>
+                {k.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        <TextInput
+          style={[styles.noteInput, { marginTop: spacing.sm }]}
+          placeholder="Add a note (optional)"
+          placeholderTextColor={colors.textSecondary}
+          value={note}
+          onChangeText={(v) => setNote(v.slice(0, 200))}
+          maxLength={200}
+          multiline
+        />
+        <Pressable
+          style={[styles.button, (selected.size === 0 || reportCondition.isPending) && { opacity: 0.6 }]}
+          disabled={selected.size === 0 || reportCondition.isPending}
+          onPress={submit}
+        >
+          <Text style={styles.buttonText}>{reportCondition.isPending ? "Saving…" : "Submit"}</Text>
+        </Pressable>
+      </View>
+    </Modal>
   );
 }
 
@@ -465,4 +707,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   buttonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "600" },
+  pulseRating: { alignItems: "center", gap: 3, paddingBottom: spacing.sm },
+  conditionChip: {
+    borderWidth: 1,
+    borderColor: colors.accent,
+    borderRadius: radii.chip,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  sheetBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radii.sheet,
+    borderTopRightRadius: radii.sheet,
+    padding: spacing.lg,
+    paddingBottom: spacing.xl,
+  },
 });

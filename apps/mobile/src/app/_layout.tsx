@@ -45,6 +45,10 @@ function Gate() {
           name="list/[id]"
           options={{ headerShown: true, headerStyle: { backgroundColor: colors.background }, headerTintColor: colors.primary, title: "" }}
         />
+        <Stack.Screen
+          name="blocked"
+          options={{ headerShown: true, headerStyle: { backgroundColor: colors.background }, headerTintColor: colors.primary, title: "" }}
+        />
         <Stack.Screen name="paywall" options={{ presentation: "modal" }} />
       </Stack.Protected>
       <Stack.Protected guard={!signedIn}>
