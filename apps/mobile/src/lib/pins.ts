@@ -27,18 +27,44 @@ export const pins: Pin[] = (raw as Tuple[]).map(([slug, name, lat, lng, region, 
   city: city ?? null,
 }));
 
-export function toGeoJSON(rows: Pin[]) {
+/**
+ * Rating stored as 0-20 (half steps); shown as 0-10, one decimal only when
+ * the value isn't a whole number. Canonical conversion — index.tsx (map
+ * labels + search/preview badges), log.tsx, and place/[slug].tsx all read
+ * off this so the number on the map matches the number everywhere else.
+ */
+export const formatRating = (r: number): string => (r / 2).toFixed(r % 2 ? 1 : 0);
+
+/**
+ * Builds the map/search GeoJSON. `ratings` is an optional slug -> 0-20
+ * average, merged in as a `rating` property plus a precomputed `label`
+ * (name, or "name · rating" for the small set of places that clear the
+ * >=3-rating floor — see useRatedPlaces). Unrated places get name-only,
+ * never a placeholder, since at launch that's the overwhelmingly common
+ * case and it must look intentional, not broken.
+ */
+export function toGeoJSON(rows: Pin[], ratings?: Map<string, number>) {
   return {
     type: "FeatureCollection" as const,
-    features: rows.map((p) => ({
-      type: "Feature" as const,
-      id: p.slug,
-      properties: { slug: p.slug, name: p.name, region: p.region },
-      geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
-    })),
+    features: rows.map((p) => {
+      const rating = ratings?.get(p.slug);
+      return {
+        type: "Feature" as const,
+        id: p.slug,
+        properties: {
+          slug: p.slug,
+          name: p.name,
+          region: p.region,
+          label: rating != null ? `${p.name} · ${formatRating(rating)}` : p.name,
+          ...(rating != null ? { rating } : {}),
+        },
+        geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
+      };
+    }),
   };
 }
 
+/** No-ratings baseline, built once at import time — the common case pre-launch. */
 export const pinsGeoJSON = toGeoJSON(pins);
 
 const norm = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9 ]/g, "");

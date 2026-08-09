@@ -46,8 +46,42 @@ import {
   type TripPlan,
 } from "../../lib/data";
 import { cancelVisitReminders, reconcileReminders } from "../../lib/reminders";
+import { PostVisitSheet } from "../../ui/PostVisitSheet";
 
 const COMMUNITY_TERMS_KEY = "marker.communityTermsAcceptedAt";
+const POST_VISIT_PROMPTED_KEY = "marker.postVisitPrompted";
+
+/** Visit-time ids the user has already been prompted about (once-only, see persistPromptedIds). */
+async function getPromptedVisitIds(): Promise<Set<string>> {
+  try {
+    const raw = await AsyncStorage.getItem(POST_VISIT_PROMPTED_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+// Serializes writes to POST_VISIT_PROMPTED_KEY behind a single in-flight
+// promise chain, so two dismissals in quick succession can never race and
+// clobber each other. Each write always carries the full set already
+// merged in local component state (see dismissPrompt) rather than doing a
+// read-modify-write against storage, which is what let one of two rapid
+// dismissals get lost before.
+let promptedWriteChain: Promise<void> = Promise.resolve();
+function persistPromptedIds(ids: Set<string>): Promise<void> {
+  promptedWriteChain = promptedWriteChain
+    .catch(() => {})
+    .then(() => AsyncStorage.setItem(POST_VISIT_PROMPTED_KEY, JSON.stringify(Array.from(ids))))
+    .catch(() => {
+      /* best-effort; worst case is one re-prompt, not a crash */
+    });
+  return promptedWriteChain;
+}
+
+/** A scheduled visit time is "done" once it's 2–48h in the past — long enough that
+ * it likely happened, not so long that the prompt feels stale. */
+const PAST_PROMPT_MIN_AGE_MS = 2 * 3600_000;
+const PAST_PROMPT_MAX_AGE_MS = 48 * 3600_000;
 
 /** Shown once before a user's first publish; agreement is then persisted. */
 async function ensureCommunityTermsAccepted(): Promise<boolean> {
@@ -149,6 +183,79 @@ export default function TripsScreen() {
     if (visitTimes) reconcileReminders(visitTimes).catch(() => {});
   }, [visitTimes]);
 
+  // Gentle "how did it go?" rail: visit times that already happened, whose
+  // place has no rating yet, and that haven't been prompted (or dismissed)
+  // before. `promptedIds` starts null until AsyncStorage resolves, and
+  // `myLogs` starts undefined until its own fetch resolves — gating on both
+  // keeps the rail hidden rather than flashing a row (for a place the user
+  // already rated) and then disappearing once myLogs catches up.
+  const { data: myLogs } = useMyLogs();
+  // Mirrors `promptedIds` state but updated synchronously (not batched), so
+  // two dismissals fired back-to-back both see the other's addition instead
+  // of racing off the same stale snapshot.
+  const promptedIdsRef = useRef<Set<string> | null>(null);
+  const [promptedIds, setPromptedIds] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    getPromptedVisitIds().then((ids) => {
+      promptedIdsRef.current = ids;
+      setPromptedIds(ids);
+    });
+  }, []);
+  const [postVisitTarget, setPostVisitTarget] = useState<{ id: string; placeId: string } | null>(null);
+
+  // Once both the prompted-ids set and visit times are loaded, drop any
+  // prompted id whose visit has aged out of the prompt window — it can
+  // never surface the rail again anyway, so there's no reason to keep it
+  // (and the on-disk list) growing forever.
+  useEffect(() => {
+    if (!visitTimes || !promptedIdsRef.current) return;
+    const byId = new Map(visitTimes.map((v) => [v.id, v]));
+    let changed = false;
+    const pruned = new Set<string>();
+    for (const id of promptedIdsRef.current) {
+      const v = byId.get(id);
+      const age = v ? Date.now() - new Date(v.at).getTime() : null;
+      if (age != null && age > PAST_PROMPT_MAX_AGE_MS) {
+        changed = true;
+        continue;
+      }
+      pruned.add(id);
+    }
+    if (changed) {
+      promptedIdsRef.current = pruned;
+      setPromptedIds(pruned);
+      persistPromptedIds(pruned).catch(() => {});
+    }
+    // Re-runs once promptedIds first hydrates from storage (it and
+    // visitTimes load independently/async, so whichever resolves second is
+    // what actually lets this prune) and, harmlessly, after any dismissal —
+    // `changed` is false on those re-checks, so it's a no-op past the first.
+  }, [visitTimes, promptedIds]);
+
+  const ratedPlaceIds = new Set((myLogs ?? []).filter((l) => l.rating != null).map((l) => l.place_id));
+  const pastPrompts = promptedIds && myLogs !== undefined
+    ? (visitTimes ?? []).filter((v) => {
+        const age = Date.now() - new Date(v.at).getTime();
+        if (age < PAST_PROMPT_MIN_AGE_MS || age > PAST_PROMPT_MAX_AGE_MS) return false;
+        if (ratedPlaceIds.has(v.place.id)) return false;
+        if (promptedIds.has(v.id)) return false;
+        return true;
+      })
+    : [];
+
+  const dismissPrompt = (id: string) => {
+    const next = new Set(promptedIdsRef.current ?? promptedIds ?? []);
+    next.add(id);
+    promptedIdsRef.current = next;
+    setPromptedIds(next);
+    persistPromptedIds(next).catch(() => {});
+  };
+
+  const closePostVisit = () => {
+    if (postVisitTarget) dismissPrompt(postVisitTarget.id);
+    setPostVisitTarget(null);
+  };
+
   const [region, setRegion] = useState("");
   const [days, setDays] = useState("3");
   const [stops, setStops] = useState("3");
@@ -216,6 +323,35 @@ export default function TripsScreen() {
                     cancelVisitReminders(v.id).catch(() => {});
                   }}
                 >
+                  <Ionicons name="close-circle-outline" size={18} color={colors.textSecondary} />
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {pastPrompts.length > 0 && (
+          <View style={[styles.templateCard, { marginBottom: spacing.md }]}>
+            <Text style={type.heading}>How did it go?</Text>
+            {pastPrompts.map((v) => (
+              <View key={v.id} style={styles.placeRow}>
+                <Ionicons name="star-outline" size={15} color={colors.accent} />
+                <Pressable
+                  style={{ flex: 1 }}
+                  onPress={() => setPostVisitTarget({ id: v.id, placeId: v.place.id })}
+                >
+                  <Text style={type.body} numberOfLines={1}>{v.place.name}</Text>
+                  <Text style={type.caption}>
+                    {new Date(v.at).toLocaleString([], {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </Text>
+                </Pressable>
+                <Pressable hitSlop={8} onPress={() => dismissPrompt(v.id)}>
                   <Ionicons name="close-circle-outline" size={18} color={colors.textSecondary} />
                 </Pressable>
               </View>
@@ -319,6 +455,14 @@ export default function TripsScreen() {
           <TripCard key={p.id} plan={p} />
         ))}
       </ScrollView>
+      {postVisitTarget && (
+        <PostVisitSheet
+          visible
+          placeId={postVisitTarget.placeId}
+          note={myLogs?.find((l) => l.place_id === postVisitTarget.placeId)?.note ?? null}
+          onClose={closePostVisit}
+        />
+      )}
     </>
   );
 }

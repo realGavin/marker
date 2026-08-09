@@ -4,7 +4,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import * as Haptics from "expo-haptics";
 import { skin } from "../skin";
 import { colors, radii, spacing, type } from "./theme";
-import { useReportCondition, useUpsertLog } from "../lib/data";
+import { useMyLogs, useReportCondition, useUpsertLog } from "../lib/data";
 
 const STARS = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20];
 
@@ -12,6 +12,13 @@ const STARS = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20];
  * One-tap capture shown right after a place is marked visited, if it has no
  * rating yet. Dismissable without saving anything — the visited log write
  * already happened before this ever opens.
+ *
+ * `note` should be the place's existing note (or null if none), so this
+ * sheet's rating-only save doesn't blank it out — useUpsertLog does a
+ * full-row upsert, so whatever we send here replaces the stored note. If a
+ * caller omits the prop, we defensively fall back to whatever's already on
+ * record via useMyLogs() instead of writing null, so a forgetful call site
+ * can never silently wipe a user's note.
  */
 export function PostVisitSheet({
   visible,
@@ -26,6 +33,9 @@ export function PostVisitSheet({
 }) {
   const upsertLog = useUpsertLog();
   const reportCondition = useReportCondition();
+  const { data: myLogs } = useMyLogs();
+  const existingNote = myLogs?.find((l) => l.place_id === placeId)?.note ?? null;
+  const noteToSave = note !== undefined ? note : existingNote;
   const [rating, setRating] = useState<number | null>(null);
   const [flags, setFlags] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
@@ -51,7 +61,7 @@ export function PostVisitSheet({
   const save = async () => {
     setSaving(true);
     try {
-      await upsertLog.mutateAsync({ placeId, status: "visited", rating, note: note ?? null });
+      await upsertLog.mutateAsync({ placeId, status: "visited", rating, note: noteToSave });
       for (const kind of flags) {
         await reportCondition.mutateAsync({ placeId, kind, note: null }).catch(() => {});
       }

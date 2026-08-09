@@ -14,11 +14,48 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
 import { buildMapStyle } from "../../lib/map-style";
-import { pins, pinsGeoJSON, searchAll, toGeoJSON, type Pin, type SearchResult } from "../../lib/pins";
-import { useMyLogs, useProfile, useUpsertLog, useDeleteLog, usePlace } from "../../lib/data";
+import { formatRating, pins, pinsGeoJSON, searchAll, toGeoJSON, type Pin, type SearchResult } from "../../lib/pins";
+import {
+  useMyLogs,
+  useProfile,
+  useUpsertLog,
+  useDeleteLog,
+  usePlace,
+  useConditions,
+  useRatedPlaces,
+} from "../../lib/data";
 import { PlacePhoto } from "../../ui/PlacePhoto";
 
 const US_CENTER: [number, number] = [-98.5, 39.8];
+
+/** Rating stored as 0–20 (half steps); shown as 0–10. Matches log.tsx / place page. */
+const shownRating = formatRating;
+
+/** Always render condition labels from the skin — the engine never names one. */
+const conditionLabel = (kind: string): string =>
+  skin.conditionKinds.find((k) => k.key === kind)?.label ?? kind;
+
+/** Compact star + numeral, matching the readout used in log.tsx rows. */
+function RatingReadout({ avg }: { avg: number }) {
+  return (
+    <View style={styles.rating}>
+      <Ionicons name="star" size={13} color={colors.accent} />
+      <Text style={[type.caption, { color: colors.textPrimary }]}>{shownRating(avg)}</Text>
+    </View>
+  );
+}
+
+/** A single subtle dot + the most-reported condition's label — never a "no data" state. */
+function ConditionIndicator({ label }: { label: string }) {
+  return (
+    <View style={styles.conditionIndicator}>
+      <View style={styles.conditionDot} />
+      <Text style={[type.caption, { color: colors.accent }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </View>
+  );
+}
 
 /** Centroid of the user's home state, from the bundled pin data. */
 function regionCenter(region: string | null | undefined): { center: [number, number]; zoom: number } {
@@ -42,6 +79,20 @@ export default function MapScreen() {
   const mapStyle = useMemo(buildMapStyle, []);
   const results = useMemo(() => searchAll(query, { tags: skin.pinFilters }), [query]);
   const { data: logs } = useMyLogs();
+  // One flat-cost fetch of every rated place (see useRatedPlaces) — never
+  // per-viewport, never per-search-keystroke. Slug-keyed, so search rows,
+  // the map pins, and the preview card all read off this single cached
+  // source of truth instead of each re-resolving slugs -> ids and
+  // re-fetching place_rating_stats themselves. Refreshes roughly hourly.
+  const { data: ratedPlaces } = useRatedPlaces();
+  const ratingBySlug = useMemo(() => {
+    if (!ratedPlaces) return undefined;
+    const entries = Object.entries(ratedPlaces);
+    if (entries.length === 0) return undefined;
+    const m = new Map<string, number>();
+    for (const [slug, r] of entries) m.set(slug, r.avg);
+    return m;
+  }, [ratedPlaces]);
   // multi-select filters: OR within a group, AND across groups
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // one dropdown per filter group; only one open at a time
@@ -71,8 +122,22 @@ export default function MapScreen() {
       return next;
     });
 
+  // Rating-merged, unfiltered baseline. Rebuilds only when ratingBySlug
+  // itself changes (roughly hourly, or once on first load) — not on every
+  // render. Pre-launch, almost nothing clears the rating floor, so
+  // ratingBySlug is usually undefined and this collapses to the static,
+  // zero-cost pinsGeoJSON built once at import time.
+  const ratedPinsGeoJSON = useMemo(
+    () => (ratingBySlug ? toGeoJSON(pins, ratingBySlug) : pinsGeoJSON),
+    [ratingBySlug],
+  );
+
   const filteredGeoJSON = useMemo(() => {
-    if (selected.size === 0 && !(radiusMi && userLoc)) return pinsGeoJSON;
+    // No filters active: return the same (referentially stable) object each
+    // render so the GeoJSONSource `data` prop doesn't change and MapLibre
+    // never re-pushes/re-indexes — this branch does NOT rebuild the 12.6k
+    // features on every unrelated re-render (e.g. `logs` refetching).
+    if (selected.size === 0 && !(radiusMi && userLoc)) return ratedPinsGeoJSON;
     const statusSel = ["visited", "want"].filter((k) => selected.has(k));
     const statusSlugs = new Set(
       (logs ?? []).filter((l) => statusSel.includes(l.status)).map((l) => l.place.slug),
@@ -97,8 +162,9 @@ export default function MapScreen() {
         }
         return true;
       }),
+      ratingBySlug,
     );
-  }, [selected, logs, radiusMi, userLoc]);
+  }, [selected, logs, radiusMi, userLoc, ratingBySlug, ratedPinsGeoJSON]);
 
   const activeCount = selected.size + (radiusMi ? 1 : 0);
 
@@ -217,6 +283,28 @@ export default function MapScreen() {
             }}
             paint={{ "text-color": "#FFFFFF" }}
           />
+          {/*
+            Three stacked circle layers read as a marker rather than a flat
+            dot, with no bundled image asset: a soft drop shadow underneath
+            (offset down, so the pin reads as sitting above the map), a
+            larger core circle with a thick light ring for contrast against
+            aerial/terrain, and a small light center dot on top (the
+            "bullseye" look common to pin glyphs). The log-status color
+            semantics stay entirely on the core layer's circle-color
+            (via pinColor), unchanged.
+          */}
+          <Layer
+            type="circle"
+            id="pin-shadow"
+            filter={["!", ["has", "point_count"]]}
+            paint={{
+              "circle-color": colors.primary,
+              "circle-opacity": 0.16,
+              "circle-blur": 0.4,
+              "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 6, 16, 11],
+              "circle-translate": [0, 2],
+            }}
+          />
           <Layer
             type="circle"
             id="pin"
@@ -224,9 +312,51 @@ export default function MapScreen() {
             paint={{
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               "circle-color": pinColor as any,
-              "circle-radius": 6,
-              "circle-stroke-width": 2,
-              "circle-stroke-color": "#FFFFFF",
+              "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 6, 16, 10],
+              "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 1.5, 16, 2.5],
+              "circle-stroke-color": colors.surface,
+            }}
+          />
+          <Layer
+            type="circle"
+            id="pin-core"
+            filter={["!", ["has", "point_count"]]}
+            paint={{
+              "circle-color": colors.surface,
+              "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 1.6, 16, 2.6],
+            }}
+          />
+          {/*
+            Names (+ rating, for the small set of places that clear the
+            >=3-rating floor — see useRatedPlaces) beside the pin. Same
+            cluster filter as the pin layers, so a label can only ever
+            render on an actual unclustered leaf feature — never on a
+            cluster bubble. minzoom 11 keeps them off the dense low-zoom
+            view where clusterRadius (45px) still folds most points
+            together and per-name labels would just be noise;
+            textAllowOverlap:false lets MapLibre cull collisions natively
+            as more points de-cluster on the way in to clusterMaxZoom (13).
+          */}
+          <Layer
+            type="symbol"
+            id="pin-label"
+            filter={["!", ["has", "point_count"]]}
+            minzoom={11}
+            layout={{
+              "text-field": ["get", "label"],
+              "text-font": ["Noto Sans Medium"],
+              "text-size": ["interpolate", ["linear"], ["zoom"], 11, 11, 16, 13],
+              "text-anchor": "left",
+              "text-offset": [0.9, 0],
+              "text-max-width": 10,
+              "text-allow-overlap": false,
+              "text-optional": true,
+            }}
+            paint={{
+              "text-color": colors.textPrimary,
+              "text-halo-color": colors.surface,
+              "text-halo-width": 1.4,
+              "text-halo-blur": 0.2,
             }}
           />
         </GeoJSONSource>
@@ -358,10 +488,22 @@ export default function MapScreen() {
             }
             renderItem={({ item }) => {
               if (item.kind === "place") {
+                // Condition indicators are intentionally omitted here — they
+                // need place ids and there's no slug-keyed source for them
+                // in this list; conditions still show on the preview card
+                // and the place page.
+                const avg = ratingBySlug?.get(item.pin.slug);
                 return (
-                  <Pressable style={styles.resultRow} onPress={() => pickResult(item)}>
-                    <Text style={type.body} numberOfLines={1}>{item.pin.name}</Text>
-                    <Text style={type.caption}>{[item.pin.city, item.pin.region].filter(Boolean).join(", ")}</Text>
+                  <Pressable style={[styles.resultRow, styles.resultRowBetween]} onPress={() => pickResult(item)}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={type.body} numberOfLines={1}>{item.pin.name}</Text>
+                      <Text style={type.caption}>{[item.pin.city, item.pin.region].filter(Boolean).join(", ")}</Text>
+                    </View>
+                    {avg !== undefined && (
+                      <View style={{ alignItems: "flex-end", gap: 2 }}>
+                        <RatingReadout avg={avg} />
+                      </View>
+                    )}
                   </Pressable>
                 );
               }
@@ -403,20 +545,34 @@ export default function MapScreen() {
         <Ionicons name={locBusy ? "hourglass" : "locate"} size={22} color={colors.primary} />
       </Pressable>
 
-      {preview && <PreviewCard pin={preview} onClose={() => setPreview(null)} />}
+      {preview && <PreviewCard pin={preview} ratingBySlug={ratingBySlug} onClose={() => setPreview(null)} />}
     </View>
   );
 }
 
 /** Bottom sheet shown on pin tap: glance, quick-log, or open the full page. */
-function PreviewCard({ pin, onClose }: { pin: Pin; onClose: () => void }) {
+function PreviewCard({
+  pin,
+  ratingBySlug,
+  onClose,
+}: {
+  pin: Pin;
+  ratingBySlug: Map<string, number> | undefined;
+  onClose: () => void;
+}) {
   const router = useRouter();
   const { data: logs } = useMyLogs();
   const { data: place } = usePlace(pin.slug);
+  // Slug-keyed off the same app-wide useRatedPlaces() fetch the map screen
+  // already made, rather than a per-place round trip (see H2 in the review
+  // that removed usePlaceRating from this screen).
+  const rating = ratingBySlug?.get(pin.slug);
+  const { data: conditions } = useConditions(place?.id);
   const upsert = useUpsertLog();
   const remove = useDeleteLog();
   const myLog = logs?.find((l) => l.place.slug === pin.slug);
   const busy = !place || upsert.isPending || remove.isPending;
+  const topCondition = conditions?.[0];
 
   // bookmark toggle: want -> clear, otherwise mark want (overwrites nothing rated)
   const toggleWant = () => {
@@ -431,9 +587,13 @@ function PreviewCard({ pin, onClose }: { pin: Pin; onClose: () => void }) {
       <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
         <View style={{ flex: 1 }}>
           <Text style={type.heading} numberOfLines={1}>{pin.name}</Text>
-          <Text style={type.caption}>
-            {[place?.city, pin.region].filter(Boolean).join(", ")}
-          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: 2 }}>
+            <Text style={type.caption}>
+              {[place?.city, pin.region].filter(Boolean).join(", ")}
+            </Text>
+            {rating !== undefined && <RatingReadout avg={rating} />}
+            {topCondition && <ConditionIndicator label={conditionLabel(topCondition.kind)} />}
+          </View>
         </View>
         <Pressable onPress={onClose} hitSlop={10}>
           <Ionicons name="close" size={20} color={colors.textSecondary} />
@@ -558,6 +718,9 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     flexShrink: 1,
   },
+  rating: { flexDirection: "row", alignItems: "center", gap: 4 },
+  conditionIndicator: { flexDirection: "row", alignItems: "center", gap: 4, maxWidth: 140 },
+  conditionDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.accent },
   preview: {
     position: "absolute",
     left: spacing.md,

@@ -515,6 +515,68 @@ export function usePlaceRating(placeId: string | undefined) {
   });
 }
 
+export interface RatedPlace {
+  slug: string;
+  avg: number; // 0-20 scale, matching place_logs.rating
+  rating_count: number;
+}
+
+/**
+ * ALL currently-rated places (>=3 ratings — see the place_rating_stats view)
+ * in a single request, joined to their slug so the map can match rows to the
+ * bundled pin data (which carries no place id). This set is small by
+ * construction, so this is the flat-cost alternative to querying per
+ * viewport/pan, which would be an unbounded per-user cost pattern this
+ * project forbids. Cached for a long window since the set changes slowly
+ * and is fetched once app-wide, not per screen. Fails soft (empty object) so
+ * a query error just hides ratings rather than breaking the map.
+ *
+ * Returns a plain slug-keyed object rather than a Map: the react-query cache
+ * is persisted to AsyncStorage via JSON.stringify (see providers/query.tsx),
+ * and JSON.stringify(new Map()) serializes to "{}" — a Map rehydrated from
+ * disk silently becomes a plain object, so any code doing `.size` or
+ * `for...of` on it would crash after the app is killed and reopened. Callers
+ * that want Map semantics should build one from this object themselves
+ * (e.g. in a useMemo), never store one in query state.
+ */
+export function useRatedPlaces() {
+  const { session } = useAuth();
+  return useQuery({
+    queryKey: ["rated-places"],
+    enabled: !!session,
+    staleTime: 3600_000, // >=1hr: this list moves slowly; no reason to refetch per visit
+    queryFn: async (): Promise<Record<string, RatedPlace>> => {
+      try {
+        const { data, error } = await sb()
+          .from("place_rating_stats")
+          .select("place_id,avg,rating_count,place:places(slug)")
+          .order("rating_count", { ascending: false })
+          // Hard cap, not an accident: place_rating_stats only includes
+          // places with >=3 ratings so this is expected to stay far below
+          // the limit, but if usage ever saturates it, ordering by
+          // rating_count desc keeps the best-established ratings and
+          // truncates the long tail rather than growing the payload
+          // unbounded.
+          .limit(2000);
+        if (error) throw error;
+        const bySlug: Record<string, RatedPlace> = {};
+        for (const row of (data ?? []) as unknown as Array<{
+          place_id: string;
+          avg: number;
+          rating_count: number;
+          place: { slug: string } | null;
+        }>) {
+          if (!row.place?.slug) continue;
+          bySlug[row.place.slug] = { slug: row.place.slug, avg: row.avg, rating_count: row.rating_count };
+        }
+        return bySlug;
+      } catch {
+        return {}; // hide rather than error
+      }
+    },
+  });
+}
+
 export interface ConditionSummary {
   place_id: string;
   kind: string;
