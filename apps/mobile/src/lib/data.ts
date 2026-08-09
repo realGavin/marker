@@ -95,6 +95,9 @@ export function useMyLogs() {
   return useQuery({
     queryKey: ["my-logs", session?.user.id],
     enabled: !!session,
+    // Mounted on six screens; own edits invalidate on write, so a longer stale
+    // window kills most redundant full-collection refetches on tab switches.
+    staleTime: 300_000,
     queryFn: async (): Promise<MyLog[]> => {
       const { data, error } = await sb()
         .from("place_logs")
@@ -582,7 +585,6 @@ export interface PublishedTrip {
   votes: number;
   editor_pick: boolean;
   published_at: string;
-  itinerary: TripItinerary;
 }
 
 /**
@@ -600,7 +602,7 @@ export function usePublishedTrips() {
       try {
         const { data, error } = await sb()
           .from("published_trips")
-          .select("id,title,summary,author_handle,author_id,days,stops,votes,editor_pick,published_at,itinerary")
+          .select("id,title,summary,author_handle,author_id,days,stops,votes,editor_pick,published_at")
           .order("editor_pick", { ascending: false })
           .order("votes", { ascending: false })
           .limit(50);
