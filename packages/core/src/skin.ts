@@ -122,6 +122,39 @@ export interface TripTemplate {
   placeSlugs: string[];
 }
 
+/**
+ * Data an `externalLinks` `url()` builder needs about a place. Deliberately
+ * minimal and niche-neutral — just enough for a mapping, review, or booking
+ * provider to find the place: a display name, coarse location for a text
+ * search query, coordinates for a native map deep link, and an optional
+ * official website.
+ */
+export interface ExternalLinkPlace {
+  name: string;
+  city: string | null;
+  region: string | null;
+  lat: number;
+  lng: number;
+  website: string | null;
+}
+
+/**
+ * One outbound "quick action" shown on the place detail page — e.g.
+ * directions, third-party reviews, or a booking provider. `icon` is an
+ * Ionicons name. `url` is a pure function: place in, an absolute URL out, or
+ * `null` when this link doesn't apply to this place (e.g. no known website) —
+ * the engine renders nothing for a `null` result rather than a dead link.
+ * The engine never knows what a given entry is *for*; it just maps over this
+ * array and renders whatever the skin returns, so a future niche can point
+ * these at entirely different providers without the engine changing at all.
+ */
+export interface ExternalLink {
+  key: string;
+  label: string;
+  icon: string;
+  url: (place: ExternalLinkPlace) => string | null;
+}
+
 export interface Skin {
   /** Stable niche identifier stored on every place row, e.g. "hiking". */
   nicheId: string;
@@ -190,4 +223,12 @@ export interface Skin {
   pinFilters: PinFilter[];
   /** Section headers for pinFilters, in display order. */
   pinFilterGroups: PinFilterGroup[];
+  /**
+   * Outbound "quick actions" row on the place detail page (directions,
+   * reviews, booking, website, …), in display order. The engine renders one
+   * tappable item per entry and drops any whose `url()` returns `null` for
+   * the current place — so a row with three available links looks just as
+   * deliberate as one with four.
+   */
+  externalLinks: ExternalLink[];
 }

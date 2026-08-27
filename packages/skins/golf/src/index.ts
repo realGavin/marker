@@ -84,22 +84,25 @@ function seasonLabel([start, end]: [number, number]): string {
   return from === to ? from : `${from}–${to}`;
 }
 
+/** Pulled out (rather than inlined below) so externalLinks can reuse a label. */
+const vocab = {
+  place: "course",
+  places: "courses",
+  visited: "Played",
+  wantTo: "Want to play",
+  myPlaces: "My courses",
+  planTrip: "Plan a golf trip",
+  visitTime: "Tee time",
+  visitTimes: "Tee times",
+  setVisitTime: "Set a tee time",
+  tripStops: "Rounds",
+  tripNotesHint: "Anything else? (walkable, coastal, resort…)",
+  appName: "Marker Golf",
+};
+
 export const golfSkin: Skin = {
   nicheId: "golf",
-  vocab: {
-    place: "course",
-    places: "courses",
-    visited: "Played",
-    wantTo: "Want to play",
-    myPlaces: "My courses",
-    planTrip: "Plan a golf trip",
-    visitTime: "Tee time",
-    visitTimes: "Tee times",
-    setVisitTime: "Set a tee time",
-    tripStops: "Rounds",
-    tripNotesHint: "Anything else? (walkable, coastal, resort…)",
-    appName: "Marker Golf",
-  },
+  vocab,
   // "Machined Light": paper-white surfaces, black controls, hairline borders,
   // sharp corners, gold as the single signal color, green reserved for
   // played-state data (pins), never chrome.
@@ -256,6 +259,59 @@ export const golfSkin: Skin = {
     { key: "hilly", label: "Hilly", group: "character" },
     { key: "short", label: "Short (<5,800 yds)", group: "length" },
     { key: "long", label: "Long (>6,800 yds)", group: "length" },
+  ],
+  // Outbound quick actions shown on the place detail page. Each url() is a
+  // pure function of the place; the engine drops any entry that returns null
+  // (e.g. no website on file) rather than rendering a dead link.
+  externalLinks: [
+    {
+      key: "directions",
+      label: "Directions",
+      icon: "navigate-outline",
+      // Apple Maps deep link — native on iOS, no API key, always resolvable
+      // since every place carries coordinates.
+      url: (place) => `http://maps.apple.com/?daddr=${place.lat},${place.lng}&q=${encodeURIComponent(place.name)}`,
+    },
+    {
+      key: "reviews",
+      label: "Google Maps",
+      icon: "star-outline",
+      // Google Maps place search: shows Google's rating/reviews/photos for
+      // the course without needing a Places API key. Name + city + region
+      // disambiguates courses that share a name across metros.
+      url: (place) => {
+        const query = [place.name, place.city, place.region].filter(Boolean).join(" ");
+        return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+      },
+    },
+    {
+      key: "teeTimes",
+      label: vocab.visitTimes,
+      icon: "calendar-outline",
+      // NOTE: GolfNow's `q` is a LOCATION field, not a course-name field.
+      // Verified on-device: passing a course name renders their default city
+      // (Orlando, FL), so a direct GolfNow deep link would strand the user in
+      // the wrong state. Their per-course URLs need facility IDs we don't have
+      // and can't get without a partner agreement, and the default is applied
+      // client-side so it can't be checked from a plain HTTP fetch.
+      //
+      // A scoped web search always lands on the right course and surfaces every
+      // booking route (GolfNow, the course's own site, other tee-time sellers)
+      // instead of just one. If this account joins GolfNow's affiliate program,
+      // swap this one line for their supplied deep-link format + partner param
+      // — no engine code changes.
+      url: (place) =>
+        `https://www.google.com/search?q=${encodeURIComponent(
+          [place.name, place.city, place.region].filter(Boolean).join(" ") + " tee times",
+        )}`
+    },
+    {
+      key: "website",
+      label: "Website",
+      icon: "globe-outline",
+      // Only ~55% of courses have a known official site; null hides the item.
+      url: (place) => place.website,
+    },
   ],
 };
 

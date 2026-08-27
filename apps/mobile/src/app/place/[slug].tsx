@@ -38,6 +38,7 @@ import { PlacePhoto } from "../../ui/PlacePhoto";
 import { PostVisitSheet } from "../../ui/PostVisitSheet";
 import { scheduleVisitReminders, cancelVisitReminders } from "../../lib/reminders";
 import { useVisitTimes, useAddVisitTime, useDeleteVisitTime } from "../../lib/data";
+import { pins } from "../../lib/pins";
 
 /** Rating stored as 0–20 (half steps); shown as 0–10. */
 const shownRating = (r: number) => (r / 2).toFixed(r % 2 ? 1 : 0);
@@ -124,6 +125,24 @@ export default function PlaceScreen() {
   const showDataFootnote = facts.some((f) => f.derived) || settingChips.length > 0;
   const website = (place.attrs as { website?: string } | null)?.website;
   const location = [place.city, place.region].filter(Boolean).join(", ");
+  // Coordinates come from the bundled pin directory (same offline dataset
+  // that drives the map), since the place API doesn't expose lat/lng today.
+  const pin = pins.find((p) => p.slug === place.slug);
+  const quickActions = skin.externalLinks
+    .map((link) => ({
+      key: link.key,
+      label: link.label,
+      icon: link.icon,
+      href: link.url({
+        name: place.name,
+        city: place.city,
+        region: place.region,
+        lat: pin?.lat ?? 0,
+        lng: pin?.lng ?? 0,
+        website: website ?? null,
+      }),
+    }))
+    .filter((link): link is typeof link & { href: string } => link.href !== null);
   const status = myLog?.status;
   const myVisitTimes = (visitTimes ?? []).filter(
     (v) => v.place.id === place.id && new Date(v.at).getTime() > Date.now(),
@@ -176,6 +195,23 @@ export default function PlaceScreen() {
         <PlacePhoto slug={place.slug} height={190} style={{ marginBottom: spacing.md }} />
         <Text style={type.title}>{place.name}</Text>
         {location ? <Text style={[type.caption, { marginTop: spacing.xs }]}>{location}</Text> : null}
+
+        {quickActions.length > 0 && (
+          <View style={styles.quickActionsRow}>
+            {quickActions.map((action, i, arr) => (
+              <Pressable
+                key={action.key}
+                style={[styles.quickAction, i < arr.length - 1 && styles.quickActionDivider]}
+                onPress={() => Linking.openURL(action.href).catch(() => {})}
+              >
+                <Ionicons name={action.icon as never} size={21} color={colors.primary} />
+                <Text style={type.label} numberOfLines={1}>
+                  {action.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
 
         {settingChips.length > 0 && (
           <View style={styles.chipRow}>
@@ -382,12 +418,6 @@ export default function PlaceScreen() {
         <View style={styles.card}>
           <Text style={type.body}>{place.description ?? "Description coming soon."}</Text>
         </View>
-
-        {website ? (
-          <Pressable style={styles.button} onPress={() => Linking.openURL(website)}>
-            <Text style={styles.buttonText}>Visit website</Text>
-          </Pressable>
-        ) : null}
 
         {similar && similar.length > 0 && (
           <View style={styles.card}>
@@ -642,6 +672,22 @@ const styles = StyleSheet.create({
   statusActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   statusActiveWant: { backgroundColor: colors.accentFill, borderColor: colors.accent },
   statusText: { fontSize: 15, fontWeight: "600", color: colors.primary },
+  quickActionsRow: {
+    flexDirection: "row",
+    marginTop: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radii.card,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+  },
+  quickAction: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    paddingVertical: spacing.sm,
+  },
+  quickActionDivider: { borderRightWidth: 1, borderRightColor: colors.hairline },
   ratingRow: { flexDirection: "row", gap: 4, marginVertical: spacing.sm },
   noteInput: {
     marginTop: spacing.sm,
