@@ -156,8 +156,8 @@ export function PostVisitSheet({
   // A shared note field can only honestly attach to ONE aspect's public
   // report — sending the same text to every scored aspect lets one note
   // (e.g. "bunkers haven't been raked") get attributed to an unrelated,
-  // contradicting verdict (e.g. "Greens — Good"). So it only ever rides
-  // along when exactly one aspect was scored.
+  // contradicting aspect (the note would show under "Greens · 4 good"). So it
+  // only ever rides along when exactly one aspect was scored.
   const singleAspectKind = touchedEntries.length === 1 ? touchedEntries[0][0] : null;
   const singleAspectLabel = singleAspectKind
     ? (skin.conditionKinds.find((k) => k.key === singleAspectKind)?.label ?? singleAspectKind)

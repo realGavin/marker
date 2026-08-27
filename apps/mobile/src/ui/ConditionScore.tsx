@@ -26,8 +26,48 @@ export function scoreColor(score: ConditionScore): string {
   return SCORE_COLOR[score];
 }
 
-export function scoreLabel(score: ConditionScore): string {
-  return SCORE_OPTIONS.find((o) => o.value === score)?.label ?? score;
+/** A place's reported condition, broken down into distinct-reporter counts. */
+export type ConditionCounts = { poor: number; ok: number; good: number };
+
+/**
+ * Fixed display precedence for the three buckets. Counts are shown in full
+ * regardless of order (a tie never hides a bucket), but something has to
+ * lead a chip and color it — poor leads on a tie so a mixed report (e.g. 3
+ * poor / 3 ok) still reads as worth a second look rather than defaulting to
+ * whichever bucket happened to sort last.
+ */
+const BUCKET_PRIORITY: ConditionScore[] = ["poor", "ok", "good"];
+
+/** Non-zero buckets, count-descending, ties broken by BUCKET_PRIORITY. Never includes a zero bucket. */
+export function orderedBuckets(counts: ConditionCounts): Array<{ bucket: ConditionScore; count: number }> {
+  return BUCKET_PRIORITY.map((bucket) => ({ bucket, count: counts[bucket] }))
+    .filter((b) => b.count > 0)
+    .sort((a, b) => b.count - a.count || BUCKET_PRIORITY.indexOf(a.bucket) - BUCKET_PRIORITY.indexOf(b.bucket));
+}
+
+/** The bucket a chip should lead with and color by — see orderedBuckets. */
+export function dominantBucket(counts: ConditionCounts): ConditionScore {
+  return orderedBuckets(counts)[0]?.bucket ?? "poor";
+}
+
+/**
+ * Running-copy words for a count, e.g. "6 poor". Deliberately NOT the raw DB
+ * enum: 'ok' is a spelling shown nowhere else in the app (the segmented
+ * control says "OK"), and the phrasing this feature was specified in was
+ * "6 reported okay". Lowercase because these read mid-sentence, unlike the
+ * control's title-case labels.
+ */
+const BUCKET_WORD: Record<ConditionScore, string> = {
+  good: "good",
+  ok: "okay",
+  poor: "poor",
+};
+
+/** e.g. "6 poor · 2 okay" — every non-zero bucket, dominant first, none rendered as "0 x". */
+export function conditionBreakdownLabel(counts: ConditionCounts): string {
+  return orderedBuckets(counts)
+    .map((b) => `${b.count} ${BUCKET_WORD[b.bucket]}`)
+    .join(" · ");
 }
 
 /**

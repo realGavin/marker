@@ -15,7 +15,7 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { skin } from "../../skin";
 import { colors, spacing, type, radii } from "../../ui/theme";
-import { ScoreRow, scoreColor, scoreLabel } from "../../ui/ConditionScore";
+import { ScoreRow, scoreColor, dominantBucket, conditionBreakdownLabel } from "../../ui/ConditionScore";
 import * as Haptics from "expo-haptics";
 import {
   usePlace,
@@ -467,17 +467,21 @@ function CommunityPulse({ placeId }: { placeId: string }) {
       )}
       {conditions && conditions.length > 0 && (
         <View style={styles.chipRow}>
-          {conditions.map((c) => (
-            <Pressable
-              key={c.kind}
-              style={[styles.conditionChip, { borderColor: scoreColor(c.score) }]}
-              onPress={() => setOpenCondition(c)}
-            >
-              <Text style={[type.label, { color: scoreColor(c.score) }]}>
-                {conditionLabel(c.kind)} — {scoreLabel(c.score)} · {c.reporters}
-              </Text>
-            </Pressable>
-          ))}
+          {conditions.map((c) => {
+            const counts = { poor: c.poor_count, ok: c.ok_count, good: c.good_count };
+            const dominant = dominantBucket(counts);
+            return (
+              <Pressable
+                key={c.kind}
+                style={[styles.conditionChip, { borderColor: scoreColor(dominant) }]}
+                onPress={() => setOpenCondition(c)}
+              >
+                <Text style={[type.label, { color: scoreColor(dominant) }]}>
+                  {conditionLabel(c.kind)} · {conditionBreakdownLabel(counts)}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
       )}
       <Pressable style={styles.addToList} onPress={() => setReportOpen(true)}>
@@ -502,8 +506,21 @@ function ConditionDetailSheet({
 }) {
   const endorse = useEndorseCondition();
   const reportContent = useReportContent();
-  // "done" renews the report's freshness — it does not raise the reporter
-  // count, which only grows from independent report_condition calls.
+  // "done" means "I agree, still true". It never touches the reporter count,
+  // which only grows from independent report_condition calls.
+  //
+  // Two caveats worth knowing before trusting this button's feedback:
+  // (1) the `endorsements` count counts only people with NO report of their
+  //     own on this (place, kind) in the window — the view excludes
+  //     self-reporters so reporters + endorsements is a true headcount. So if
+  //     you already reported this aspect yourself, the RPC still succeeds and
+  //     this still flips to "done", but every visible number stays put. The
+  //     only "already participated" state we can detect client-side is `own`
+  //     (endorsing your own report), and catching the other case would cost a
+  //     per-user query on a screen we deliberately keep query-light.
+  // (2) it does still push the row's expires_at out, but that governs
+  //     retention only — the displayed counts run off a fixed 14-day
+  //     created_at window, so endorsing never keeps a number on screen.
   // "own" is a real, expected state (your own report put the row here), not
   // an error — the endorse RPC rejects it with own_report.
   const [endorseState, setEndorseState] = useState<"idle" | "done" | "own">("idle");
@@ -545,17 +562,29 @@ function ConditionDetailSheet({
   const endorseLabel =
     endorseState === "done" ? "Still there — thanks" : endorseState === "own" ? "That's your report" : "I saw this too";
 
+  const counts = { poor: condition.poor_count, ok: condition.ok_count, good: condition.good_count };
+  const dominant = dominantBucket(counts);
+
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.sheetBackdrop} onPress={onClose} />
       <View style={styles.sheet}>
         <Text style={type.heading}>{conditionLabel(condition.kind)}</Text>
-        <Text style={[type.body, { color: scoreColor(condition.score), fontWeight: "700", marginTop: spacing.xs }]}>
-          {scoreLabel(condition.score)} · {condition.reporters} reports · {relativeAge(condition.latest_at)}
+        <Text style={[type.body, { color: scoreColor(dominant), fontWeight: "700", marginTop: spacing.xs }]}>
+          {conditionBreakdownLabel(counts)}
+        </Text>
+        <Text style={[type.caption, { marginTop: 2 }]}>
+          {condition.reporters} reporters in the past 2 weeks · latest report {relativeAge(condition.latest_at)}
         </Text>
         {condition.latest_note ? (
           <Text style={[type.body, { marginTop: spacing.sm }]}>{condition.latest_note}</Text>
         ) : null}
+        {condition.endorsements > 0 && (
+          <Text style={[type.caption, { marginTop: spacing.xs }]}>
+            {condition.endorsements}{" "}
+            {condition.endorsements === 1 ? skin.vocab.reporterNounSingular : skin.vocab.reporterNoun} agreed
+          </Text>
+        )}
         <Pressable
           style={[styles.button, (endorseState !== "idle" || endorse.isPending) && { opacity: 0.6 }]}
           disabled={endorseState !== "idle" || endorse.isPending}
@@ -639,6 +668,9 @@ function ReportConditionSheet({
           maxLength={200}
           multiline
         />
+        <Text style={[type.caption, { marginTop: spacing.sm }]}>
+          Your report is anonymous — only the number of reports is shown publicly.
+        </Text>
         <Pressable
           style={[styles.button, (!kind || !score || reportCondition.isPending) && { opacity: 0.6 }]}
           disabled={!kind || !score || reportCondition.isPending}

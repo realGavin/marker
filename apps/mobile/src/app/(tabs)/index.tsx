@@ -48,17 +48,19 @@ function RatingReadout({ avg }: { avg: number }) {
 }
 
 /**
- * Small warning glyph for a place carrying an active Poor condition verdict —
- * sourced entirely from useFlaggedPlaces(), so it costs nothing beyond the
- * one app-wide flagged-places fetch. Renders nothing for the overwhelming
- * majority of places, which have no flag at all.
+ * Small warning glyph plus the poor-report count for a place worth flagging —
+ * a 2-report flag should never read like an established fact, so the count
+ * rides along rather than a bare glyph. Sourced entirely from
+ * useFlaggedPlaces(), so it costs nothing beyond the one app-wide
+ * flagged-places fetch. Renders nothing for the overwhelming majority of
+ * places, which have no flag at all.
  */
 function FlaggedIndicator({ flag }: { flag: FlaggedPlace }) {
   return (
     <View style={styles.conditionIndicator}>
-      <Ionicons name="warning" size={13} color={scoreColor(flag.worstScore)} />
-      <Text style={[type.caption, { color: scoreColor(flag.worstScore) }]} numberOfLines={1}>
-        {conditionLabel(flag.worstKind)} · {flag.reporters}
+      <Ionicons name="warning" size={13} color={scoreColor("poor")} />
+      <Text style={[type.caption, { color: scoreColor("poor") }]} numberOfLines={1}>
+        {conditionLabel(flag.worstKind)} · {flag.poorCount}
       </Text>
     </View>
   );

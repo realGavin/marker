@@ -577,15 +577,26 @@ export function useRatedPlaces() {
   });
 }
 
-/** The three verdicts a condition report or its rolled-up summary can carry. */
+/** The three verdicts a single condition report can carry. */
 export type ConditionScore = "good" | "ok" | "poor";
 
 export interface ConditionSummary {
   place_id: string;
   kind: string;
-  /** Modal score across active reports for this kind. */
-  score: ConditionScore;
+  /** DISTINCT reporting users choosing "poor" within the 14-day window. */
+  poor_count: number;
+  /** DISTINCT reporting users choosing "ok" within the 14-day window. */
+  ok_count: number;
+  /** DISTINCT reporting users choosing "good" within the 14-day window. */
+  good_count: number;
+  /** Total distinct reporters within the window (>=2, or this row wouldn't exist). */
   reporters: number;
+  /**
+   * Distinct users who endorsed ("still true") without filing their own
+   * report on this (place, kind) — disjoint from `reporters`, so
+   * `reporters + endorsements` is a true headcount, not a double-count.
+   */
+  endorsements: number;
   latest_note: string | null;
   latest_at: string;
   expires_at: string;
@@ -593,7 +604,12 @@ export interface ConditionSummary {
   latest_report_id: string;
 }
 
-/** Active, corroborated condition reports for a place (>=2 reporters, unexpired). */
+/**
+ * Active, corroborated condition reports for a place — a full poor/ok/good
+ * breakdown per aspect, not a single collapsed verdict, so the reader can
+ * judge the evidence themselves (see condition_summary: DISTINCT reporters
+ * within a 14-day window, gated at >=2 reporters).
+ */
 export function useConditions(placeId: string | undefined) {
   return useQuery({
     queryKey: ["conditions", placeId],
@@ -602,7 +618,9 @@ export function useConditions(placeId: string | undefined) {
       try {
         const { data, error } = await sb()
           .from("condition_summary")
-          .select("place_id,kind,score,reporters,latest_note,latest_at,expires_at,latest_report_id")
+          .select(
+            "place_id,kind,poor_count,ok_count,good_count,reporters,endorsements,latest_note,latest_at,expires_at,latest_report_id",
+          )
           .eq("place_id", placeId)
           .order("reporters", { ascending: false });
         if (error) throw error;
@@ -640,21 +658,27 @@ export function useReportCondition() {
 
 export interface FlaggedPlace {
   slug: string;
+  /** The kind with the most "poor" reports for this place, not merely the most recent. */
   worstKind: string;
-  worstScore: ConditionScore;
+  /** DISTINCT reporters choosing "poor" for worstKind within the 14-day window. */
+  poorCount: number;
+  /** Total distinct reporters within the window (>=2, or this row wouldn't exist). */
   reporters: number;
   latestAt: string;
 }
 
 /**
- * ALL places currently carrying an active POOR condition verdict, in a single
- * request, keyed by slug — the exact pattern of useRatedPlaces() above, for
- * the same reasons: this must never become a per-row or per-viewport query,
- * and slug is what lets search rows and the bundled map pin data match a row
- * here without resolving a place id first. place_condition_flags only holds
- * one row per place with an active POOR verdict (>=2 reporters, unexpired),
- * so this set is small by construction. Returns a plain slug-keyed object,
- * not a Map: the react-query cache persists through JSON.stringify (see
+ * ALL places currently worth a warning, in a single request, keyed by slug —
+ * the exact pattern of useRatedPlaces() above, for the same reasons: this
+ * must never become a per-row or per-viewport query, and slug is what lets
+ * search rows and the bundled map pin data match a row here without
+ * resolving a place id first. place_condition_flags only holds one row per
+ * place where two or more accounts reported "poor" within the past 14 days,
+ * and "poor" is at least the largest bucket — a different, narrower rule
+ * than condition_summary's own >=2-reporters floor, and on a different
+ * clock than a row's 30-day retention window (expires_at) — so this set is
+ * small by construction. Returns a plain slug-keyed object, not
+ * a Map: the react-query cache persists through JSON.stringify (see
  * providers/query.tsx), and a Map rehydrated from that silently becomes a
  * plain object, so anything expecting Map semantics would crash after the
  * app is killed and reopened — see the useRatedPlaces doc for the incident
@@ -670,10 +694,10 @@ export function useFlaggedPlaces() {
       try {
         const { data, error } = await sb()
           .from("place_condition_flags")
-          .select("slug,worst_kind,worst_score,reporters,latest_at")
+          .select("slug,worst_kind,poor_count,reporters,latest_at")
           .order("latest_at", { ascending: false })
           // Deliberate cap, not an accident: this table only ever holds
-          // places with an ACTIVE POOR verdict, so it's small by
+          // places meeting the poor-count flag rule above, so it's small by
           // construction; ordering by freshness keeps the newest flags if
           // usage ever somehow saturates it.
           .limit(2000);
@@ -682,14 +706,14 @@ export function useFlaggedPlaces() {
         for (const row of (data ?? []) as unknown as Array<{
           slug: string;
           worst_kind: string;
-          worst_score: ConditionScore;
+          poor_count: number;
           reporters: number;
           latest_at: string;
         }>) {
           bySlug[row.slug] = {
             slug: row.slug,
             worstKind: row.worst_kind,
-            worstScore: row.worst_score,
+            poorCount: row.poor_count,
             reporters: row.reporters,
             latestAt: row.latest_at,
           };

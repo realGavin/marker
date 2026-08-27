@@ -38,6 +38,10 @@ export interface SkinVocabulary {
   tripNotesHint: string;
   /** App display name for this niche, e.g. "Marker Trails" */
   appName: string;
+  /** Plural noun for a visitor who files a condition report, e.g. "hikers" */
+  reporterNoun: string;
+  /** Singular of reporterNoun, e.g. "hiker" — endorsement counts start at 1. */
+  reporterNounSingular: string;
 }
 
 export interface SkinTheme {

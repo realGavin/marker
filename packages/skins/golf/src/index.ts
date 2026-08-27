@@ -98,6 +98,8 @@ const vocab = {
   tripStops: "Rounds",
   tripNotesHint: "Anything else? (walkable, coastal, resort…)",
   appName: "Marker Golf",
+  reporterNoun: "golfers",
+    reporterNounSingular: "golfer",
 };
 
 export const golfSkin: Skin = {
