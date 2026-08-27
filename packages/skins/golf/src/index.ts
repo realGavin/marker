@@ -278,7 +278,7 @@ export const golfSkin: Skin = {
     {
       key: "reviews",
       label: "Google Maps",
-      icon: "star-outline",
+      icon: "navigate-circle-outline",
       // Google Maps place search: shows Google's rating/reviews/photos AND
       // directions for the course in one tap, without needing a Places API
       // key. Name + city + region disambiguates courses that share a name
