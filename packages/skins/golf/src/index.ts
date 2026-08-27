@@ -263,47 +263,28 @@ export const golfSkin: Skin = {
   // Outbound quick actions shown on the place detail page. Each url() is a
   // pure function of the place; the engine drops any entry that returns null
   // (e.g. no website on file) rather than rendering a dead link.
+  //
+  // Apple Maps "Directions" and a GolfNow-style tee-time search used to live
+  // here too. Cut both: Directions was redundant with Google Maps below
+  // (which already opens a map, one tap away from turn-by-turn), and the
+  // tee-time entry was just a disguised web search, not a real booking flow.
+  // A real booking deep link can slot back in here if a partner integration
+  // (e.g. GolfNow's affiliate program) ever supplies one — no engine changes
+  // needed either way, since the engine just renders whatever this array
+  // returns non-null for.
   externalLinks: [
-    {
-      key: "directions",
-      label: "Directions",
-      icon: "navigate-outline",
-      // Apple Maps deep link — native on iOS, no API key, always resolvable
-      // since every place carries coordinates.
-      url: (place) => `http://maps.apple.com/?daddr=${place.lat},${place.lng}&q=${encodeURIComponent(place.name)}`,
-    },
     {
       key: "reviews",
       label: "Google Maps",
       icon: "star-outline",
-      // Google Maps place search: shows Google's rating/reviews/photos for
-      // the course without needing a Places API key. Name + city + region
-      // disambiguates courses that share a name across metros.
+      // Google Maps place search: shows Google's rating/reviews/photos AND
+      // directions for the course in one tap, without needing a Places API
+      // key. Name + city + region disambiguates courses that share a name
+      // across metros.
       url: (place) => {
         const query = [place.name, place.city, place.region].filter(Boolean).join(" ");
         return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
       },
-    },
-    {
-      key: "teeTimes",
-      label: vocab.visitTimes,
-      icon: "calendar-outline",
-      // NOTE: GolfNow's `q` is a LOCATION field, not a course-name field.
-      // Verified on-device: passing a course name renders their default city
-      // (Orlando, FL), so a direct GolfNow deep link would strand the user in
-      // the wrong state. Their per-course URLs need facility IDs we don't have
-      // and can't get without a partner agreement, and the default is applied
-      // client-side so it can't be checked from a plain HTTP fetch.
-      //
-      // A scoped web search always lands on the right course and surfaces every
-      // booking route (GolfNow, the course's own site, other tee-time sellers)
-      // instead of just one. If this account joins GolfNow's affiliate program,
-      // swap this one line for their supplied deep-link format + partner param
-      // — no engine code changes.
-      url: (place) =>
-        `https://www.google.com/search?q=${encodeURIComponent(
-          [place.name, place.city, place.region].filter(Boolean).join(" ") + " tee times",
-        )}`
     },
     {
       key: "website",

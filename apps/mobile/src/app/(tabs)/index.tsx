@@ -13,6 +13,7 @@ import { useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
+import { scoreColor } from "../../ui/ConditionScore";
 import { buildMapStyle } from "../../lib/map-style";
 import { formatRating, pins, pinsGeoJSON, searchAll, toGeoJSON, type Pin, type SearchResult } from "../../lib/pins";
 import {
@@ -21,8 +22,9 @@ import {
   useUpsertLog,
   useDeleteLog,
   usePlace,
-  useConditions,
   useRatedPlaces,
+  useFlaggedPlaces,
+  type FlaggedPlace,
 } from "../../lib/data";
 import { PlacePhoto } from "../../ui/PlacePhoto";
 
@@ -45,13 +47,18 @@ function RatingReadout({ avg }: { avg: number }) {
   );
 }
 
-/** A single subtle dot + the most-reported condition's label — never a "no data" state. */
-function ConditionIndicator({ label }: { label: string }) {
+/**
+ * Small warning glyph for a place carrying an active Poor condition verdict —
+ * sourced entirely from useFlaggedPlaces(), so it costs nothing beyond the
+ * one app-wide flagged-places fetch. Renders nothing for the overwhelming
+ * majority of places, which have no flag at all.
+ */
+function FlaggedIndicator({ flag }: { flag: FlaggedPlace }) {
   return (
     <View style={styles.conditionIndicator}>
-      <View style={styles.conditionDot} />
-      <Text style={[type.caption, { color: colors.accent }]} numberOfLines={1}>
-        {label}
+      <Ionicons name="warning" size={13} color={scoreColor(flag.worstScore)} />
+      <Text style={[type.caption, { color: scoreColor(flag.worstScore) }]} numberOfLines={1}>
+        {conditionLabel(flag.worstKind)} · {flag.reporters}
       </Text>
     </View>
   );
@@ -93,6 +100,10 @@ export default function MapScreen() {
     for (const [slug, r] of entries) m.set(slug, r.avg);
     return m;
   }, [ratedPlaces]);
+  // Same single flat-cost, slug-keyed fetch pattern as useRatedPlaces —
+  // shared by the search results list and the pin preview card below so
+  // neither has to resolve a place id first.
+  const { data: flaggedPlaces } = useFlaggedPlaces();
   // multi-select filters: OR within a group, AND across groups
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // one dropdown per filter group; only one open at a time
@@ -488,20 +499,21 @@ export default function MapScreen() {
             }
             renderItem={({ item }) => {
               if (item.kind === "place") {
-                // Condition indicators are intentionally omitted here — they
-                // need place ids and there's no slug-keyed source for them
-                // in this list; conditions still show on the preview card
-                // and the place page.
+                // Both merged in purely by slug — see useRatedPlaces /
+                // useFlaggedPlaces — so this row never has to resolve a
+                // place id just to show a rating or a condition warning.
                 const avg = ratingBySlug?.get(item.pin.slug);
+                const flag = flaggedPlaces?.[item.pin.slug];
                 return (
                   <Pressable style={[styles.resultRow, styles.resultRowBetween]} onPress={() => pickResult(item)}>
                     <View style={{ flex: 1 }}>
                       <Text style={type.body} numberOfLines={1}>{item.pin.name}</Text>
                       <Text style={type.caption}>{[item.pin.city, item.pin.region].filter(Boolean).join(", ")}</Text>
                     </View>
-                    {avg !== undefined && (
+                    {(avg !== undefined || flag) && (
                       <View style={{ alignItems: "flex-end", gap: 2 }}>
-                        <RatingReadout avg={avg} />
+                        {avg !== undefined && <RatingReadout avg={avg} />}
+                        {flag && <FlaggedIndicator flag={flag} />}
                       </View>
                     )}
                   </Pressable>
@@ -545,7 +557,14 @@ export default function MapScreen() {
         <Ionicons name={locBusy ? "hourglass" : "locate"} size={22} color={colors.primary} />
       </Pressable>
 
-      {preview && <PreviewCard pin={preview} ratingBySlug={ratingBySlug} onClose={() => setPreview(null)} />}
+      {preview && (
+        <PreviewCard
+          pin={preview}
+          ratingBySlug={ratingBySlug}
+          flaggedBySlug={flaggedPlaces}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </View>
   );
 }
@@ -554,10 +573,12 @@ export default function MapScreen() {
 function PreviewCard({
   pin,
   ratingBySlug,
+  flaggedBySlug,
   onClose,
 }: {
   pin: Pin;
   ratingBySlug: Map<string, number> | undefined;
+  flaggedBySlug: Record<string, FlaggedPlace> | undefined;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -567,12 +588,11 @@ function PreviewCard({
   // already made, rather than a per-place round trip (see H2 in the review
   // that removed usePlaceRating from this screen).
   const rating = ratingBySlug?.get(pin.slug);
-  const { data: conditions } = useConditions(place?.id);
+  const flag = flaggedBySlug?.[pin.slug];
   const upsert = useUpsertLog();
   const remove = useDeleteLog();
   const myLog = logs?.find((l) => l.place.slug === pin.slug);
   const busy = !place || upsert.isPending || remove.isPending;
-  const topCondition = conditions?.[0];
 
   // bookmark toggle: want -> clear, otherwise mark want (overwrites nothing rated)
   const toggleWant = () => {
@@ -592,7 +612,7 @@ function PreviewCard({
               {[place?.city, pin.region].filter(Boolean).join(", ")}
             </Text>
             {rating !== undefined && <RatingReadout avg={rating} />}
-            {topCondition && <ConditionIndicator label={conditionLabel(topCondition.kind)} />}
+            {flag && <FlaggedIndicator flag={flag} />}
           </View>
         </View>
         <Pressable onPress={onClose} hitSlop={10}>
@@ -720,7 +740,6 @@ const styles = StyleSheet.create({
   },
   rating: { flexDirection: "row", alignItems: "center", gap: 4 },
   conditionIndicator: { flexDirection: "row", alignItems: "center", gap: 4, maxWidth: 140 },
-  conditionDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.accent },
   preview: {
     position: "absolute",
     left: spacing.md,

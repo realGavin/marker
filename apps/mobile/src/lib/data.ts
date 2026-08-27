@@ -577,9 +577,14 @@ export function useRatedPlaces() {
   });
 }
 
+/** The three verdicts a condition report or its rolled-up summary can carry. */
+export type ConditionScore = "good" | "ok" | "poor";
+
 export interface ConditionSummary {
   place_id: string;
   kind: string;
+  /** Modal score across active reports for this kind. */
+  score: ConditionScore;
   reporters: number;
   latest_note: string | null;
   latest_at: string;
@@ -597,7 +602,7 @@ export function useConditions(placeId: string | undefined) {
       try {
         const { data, error } = await sb()
           .from("condition_summary")
-          .select("place_id,kind,reporters,latest_note,latest_at,expires_at,latest_report_id")
+          .select("place_id,kind,score,reporters,latest_note,latest_at,expires_at,latest_report_id")
           .eq("place_id", placeId)
           .order("reporters", { ascending: false });
         if (error) throw error;
@@ -612,16 +617,88 @@ export function useConditions(placeId: string | undefined) {
 export function useReportCondition() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { placeId: string; kind: string; note?: string | null }) => {
+    mutationFn: async (input: { placeId: string; kind: string; score: ConditionScore; note?: string | null }) => {
       const { data, error } = await sb().rpc("report_condition", {
         place: input.placeId,
         kind: input.kind,
+        score: input.score,
         note: input.note ?? null,
       });
       if (error) throw error;
       return data as string;
     },
-    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ["conditions", v.placeId] }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ["conditions", v.placeId] });
+      // A report can be the one that tips a place over the flag threshold —
+      // without this, the place page updates immediately but the map/search
+      // indicator (staleTime: 1hr, see useFlaggedPlaces) doesn't catch up
+      // for up to an hour.
+      qc.invalidateQueries({ queryKey: ["flagged-places"] });
+    },
+  });
+}
+
+export interface FlaggedPlace {
+  slug: string;
+  worstKind: string;
+  worstScore: ConditionScore;
+  reporters: number;
+  latestAt: string;
+}
+
+/**
+ * ALL places currently carrying an active POOR condition verdict, in a single
+ * request, keyed by slug — the exact pattern of useRatedPlaces() above, for
+ * the same reasons: this must never become a per-row or per-viewport query,
+ * and slug is what lets search rows and the bundled map pin data match a row
+ * here without resolving a place id first. place_condition_flags only holds
+ * one row per place with an active POOR verdict (>=2 reporters, unexpired),
+ * so this set is small by construction. Returns a plain slug-keyed object,
+ * not a Map: the react-query cache persists through JSON.stringify (see
+ * providers/query.tsx), and a Map rehydrated from that silently becomes a
+ * plain object, so anything expecting Map semantics would crash after the
+ * app is killed and reopened — see the useRatedPlaces doc for the incident
+ * this avoids repeating.
+ */
+export function useFlaggedPlaces() {
+  const { session } = useAuth();
+  return useQuery({
+    queryKey: ["flagged-places"],
+    enabled: !!session,
+    staleTime: 3600_000, // >=1hr: same slow-moving, app-wide fetch cadence as useRatedPlaces
+    queryFn: async (): Promise<Record<string, FlaggedPlace>> => {
+      try {
+        const { data, error } = await sb()
+          .from("place_condition_flags")
+          .select("slug,worst_kind,worst_score,reporters,latest_at")
+          .order("latest_at", { ascending: false })
+          // Deliberate cap, not an accident: this table only ever holds
+          // places with an ACTIVE POOR verdict, so it's small by
+          // construction; ordering by freshness keeps the newest flags if
+          // usage ever somehow saturates it.
+          .limit(2000);
+        if (error) throw error;
+        const bySlug: Record<string, FlaggedPlace> = {};
+        for (const row of (data ?? []) as unknown as Array<{
+          slug: string;
+          worst_kind: string;
+          worst_score: ConditionScore;
+          reporters: number;
+          latest_at: string;
+        }>) {
+          bySlug[row.slug] = {
+            slug: row.slug,
+            worstKind: row.worst_kind,
+            worstScore: row.worst_score,
+            reporters: row.reporters,
+            latestAt: row.latest_at,
+          };
+        }
+        return bySlug;
+      } catch {
+        return {}; // hide rather than error
+      }
+    },
   });
 }
 

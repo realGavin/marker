@@ -15,6 +15,7 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { skin } from "../../skin";
 import { colors, spacing, type, radii } from "../../ui/theme";
+import { ScoreRow, scoreColor, scoreLabel } from "../../ui/ConditionScore";
 import * as Haptics from "expo-haptics";
 import {
   usePlace,
@@ -31,11 +32,12 @@ import {
   useEndorseCondition,
   useReportContent,
   type ConditionSummary,
+  type ConditionScore,
 } from "../../lib/data";
 import { useRouter } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { PlacePhoto } from "../../ui/PlacePhoto";
-import { PostVisitSheet } from "../../ui/PostVisitSheet";
+import { PostVisitSheet, StarRating } from "../../ui/PostVisitSheet";
 import { scheduleVisitReminders, cancelVisitReminders } from "../../lib/reminders";
 import { useVisitTimes, useAddVisitTime, useDeleteVisitTime } from "../../lib/data";
 import { pins } from "../../lib/pins";
@@ -344,17 +346,11 @@ export default function PlaceScreen() {
         {status === "visited" && (
           <View style={styles.card}>
             <Text style={type.heading}>Your rating</Text>
-            <View style={styles.ratingRow}>
-              {[2, 4, 6, 8, 10, 12, 14, 16, 18, 20].map((r) => (
-                <Pressable key={r} onPress={() => saveDetails(rating === r ? null : r)} hitSlop={4}>
-                  <Ionicons
-                    name={rating != null && rating >= r ? "star" : "star-outline"}
-                    size={26}
-                    color={colors.accent}
-                  />
-                </Pressable>
-              ))}
-            </View>
+            {/* Same half-tap StarRating the post-visit sheet uses (see M2) —
+                one rating control app-wide, not a 10-star row here and a
+                5-star row there rendering the identical stored value two
+                different ways. */}
+            <StarRating value={rating} onChange={saveDetails} />
             {rating != null && <Text style={type.caption}>{shownRating(rating)} / 10</Text>}
             <TextInput
               style={styles.noteInput}
@@ -472,9 +468,13 @@ function CommunityPulse({ placeId }: { placeId: string }) {
       {conditions && conditions.length > 0 && (
         <View style={styles.chipRow}>
           {conditions.map((c) => (
-            <Pressable key={c.kind} style={styles.conditionChip} onPress={() => setOpenCondition(c)}>
-              <Text style={[type.label, { color: colors.accent }]}>
-                {conditionLabel(c.kind)} · {c.reporters}
+            <Pressable
+              key={c.kind}
+              style={[styles.conditionChip, { borderColor: scoreColor(c.score) }]}
+              onPress={() => setOpenCondition(c)}
+            >
+              <Text style={[type.label, { color: scoreColor(c.score) }]}>
+                {conditionLabel(c.kind)} — {scoreLabel(c.score)} · {c.reporters}
               </Text>
             </Pressable>
           ))}
@@ -550,8 +550,8 @@ function ConditionDetailSheet({
       <Pressable style={styles.sheetBackdrop} onPress={onClose} />
       <View style={styles.sheet}>
         <Text style={type.heading}>{conditionLabel(condition.kind)}</Text>
-        <Text style={[type.caption, { marginTop: spacing.xs }]}>
-          {relativeAge(condition.latest_at)} · {condition.reporters} reports
+        <Text style={[type.body, { color: scoreColor(condition.score), fontWeight: "700", marginTop: spacing.xs }]}>
+          {scoreLabel(condition.score)} · {condition.reporters} reports · {relativeAge(condition.latest_at)}
         </Text>
         {condition.latest_note ? (
           <Text style={[type.body, { marginTop: spacing.sm }]}>{condition.latest_note}</Text>
@@ -571,6 +571,7 @@ function ConditionDetailSheet({
   );
 }
 
+/** Pick one aspect, score it Good/OK/Poor, optionally note it — one report, done. */
 function ReportConditionSheet({
   visible,
   placeId,
@@ -581,32 +582,26 @@ function ReportConditionSheet({
   onClose: () => void;
 }) {
   const reportCondition = useReportCondition();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [kind, setKind] = useState<string | null>(null);
+  const [score, setScore] = useState<ConditionScore | undefined>(undefined);
   const [note, setNote] = useState("");
 
   useEffect(() => {
     if (visible) {
-      setSelected(new Set());
+      setKind(null);
+      setScore(undefined);
       setNote("");
     }
   }, [visible]);
 
   if (!visible) return null;
 
-  const toggle = (key: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
+  const selectedFact = skin.conditionKinds.find((k) => k.key === kind);
 
   const submit = async () => {
+    if (!kind || !score) return;
     try {
-      for (const key of selected) {
-        await reportCondition.mutateAsync({ placeId, kind: key, note: note.trim() || null });
-      }
+      await reportCondition.mutateAsync({ placeId, kind, score, note: note.trim() || null });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       onClose();
     } catch {
@@ -623,15 +618,18 @@ function ReportConditionSheet({
           {skin.conditionKinds.map((k) => (
             <Pressable
               key={k.key}
-              style={[styles.chip, selected.has(k.key) && styles.chipActive]}
-              onPress={() => toggle(k.key)}
+              style={[styles.chip, kind === k.key && styles.chipActive]}
+              onPress={() => setKind(kind === k.key ? null : k.key)}
             >
-              <Text style={[type.label, { color: selected.has(k.key) ? "#FFF" : colors.textPrimary }]}>
-                {k.label}
-              </Text>
+              <Text style={[type.label, { color: kind === k.key ? "#FFF" : colors.textPrimary }]}>{k.label}</Text>
             </Pressable>
           ))}
         </View>
+        {selectedFact && (
+          <View style={{ marginTop: spacing.sm }}>
+            <ScoreRow label={selectedFact.label} value={score} onChange={setScore} />
+          </View>
+        )}
         <TextInput
           style={[styles.noteInput, { marginTop: spacing.sm }]}
           placeholder="Add a note (optional)"
@@ -642,8 +640,8 @@ function ReportConditionSheet({
           multiline
         />
         <Pressable
-          style={[styles.button, (selected.size === 0 || reportCondition.isPending) && { opacity: 0.6 }]}
-          disabled={selected.size === 0 || reportCondition.isPending}
+          style={[styles.button, (!kind || !score || reportCondition.isPending) && { opacity: 0.6 }]}
+          disabled={!kind || !score || reportCondition.isPending}
           onPress={submit}
         >
           <Text style={styles.buttonText}>{reportCondition.isPending ? "Saving…" : "Submit"}</Text>
