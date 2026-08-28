@@ -159,7 +159,7 @@ export default function PlaceScreen() {
       if (!granted) {
         Alert.alert(
           "Reminders off",
-          `Saved, but notifications are disabled — enable them in Settings to get reminded 24h and 4h before your ${skin.vocab.visitTime.toLowerCase()}.`,
+          `Saved, but notifications are disabled — enable them in Settings to get reminded the evening before and when it's time to leave for your ${skin.vocab.visitTime.toLowerCase()}.`,
         );
       }
     } catch {
@@ -290,7 +290,7 @@ export default function PlaceScreen() {
 
         <Pressable style={styles.addToList} onPress={() => setTimePickerOpen(!timePickerOpen)}>
           <Ionicons name="alarm-outline" size={18} color={colors.primary} />
-          <Text style={styles.addToListText}>{skin.vocab.setVisitTime}</Text>
+          <Text style={styles.addToListText}>{skin.vocab.setVisitTimeReminder}</Text>
           <Ionicons name={timePickerOpen ? "chevron-up" : "chevron-down"} size={15} color={colors.textSecondary} />
         </Pressable>
         {timePickerOpen && (
@@ -309,7 +309,7 @@ export default function PlaceScreen() {
               onPress={confirmVisitTime}
             >
               <Text style={styles.buttonText}>
-                Remind me 24h & 4h before
+                Remind me the evening before & when it's time to leave
               </Text>
             </Pressable>
           </View>

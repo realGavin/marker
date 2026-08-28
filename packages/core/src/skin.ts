@@ -30,8 +30,12 @@ export interface SkinVocabulary {
   visitTime: string;
   /** plural of visitTime */
   visitTimes: string;
-  /** CTA to schedule one, e.g. "Set a start time" */
-  setVisitTime: string;
+  /**
+   * CTA to schedule a reminder for one, e.g. "Set a start time reminder".
+   * Must read as setting a personal reminder, never as booking or reserving
+   * anything with the place itself — the app has no booking capability.
+   */
+  setVisitTimeReminder: string;
   /** label for the per-trip activity count, e.g. "Hikes" */
   tripStops: string;
   /** placeholder example text for the trip notes field, e.g. "Anything else? (elevation gain, shade, permits…)" */

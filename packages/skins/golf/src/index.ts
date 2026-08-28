@@ -94,7 +94,7 @@ const vocab = {
   planTrip: "Plan a golf trip",
   visitTime: "Tee time",
   visitTimes: "Tee times",
-  setVisitTime: "Set a tee time",
+  setVisitTimeReminder: "Set a tee time reminder",
   tripStops: "Rounds",
   tripNotesHint: "Anything else? (walkable, coastal, resort…)",
   appName: "Marker Golf",
