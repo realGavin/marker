@@ -211,10 +211,23 @@ export function useSimilarPlaces(placeId: string | undefined) {
   });
 }
 
+export interface TripStop {
+  id: string;
+  slug: string;
+  name: string;
+  city: string | null;
+  region: string | null;
+  /** One grounded line of reasoning for why this stop was picked; absent on trips planned before this field existed. */
+  why?: string;
+  /** Distance in km to the next stop; absent on older trips. */
+  nextHopKm?: number;
+}
 export interface TripDay {
   day: number;
   note: string;
-  places: Array<{ id: string; slug: string; name: string; city: string | null; region: string | null }>;
+  /** Short seasonal caveat for the day (e.g. a shoulder-season weather note); absent on older trips. */
+  seasonNote?: string;
+  places: TripStop[];
 }
 export interface TripItinerary {
   summary: string;
@@ -226,9 +239,49 @@ export interface TripPlan {
   title: string | null;
   start_date: string | null; // YYYY-MM-DD
   invite_code: string;
-  request: { region: string; days: number; stops?: number; rounds?: number }; // engine-purity-ignore: legacy DB field name, unused
+  request: { region: string; days: number } & Record<string, unknown>; // engine-purity-ignore: opaque bag of the original request (region/days plus whatever else the planner contract sent, e.g. a per-day activity count)
   itinerary: TripItinerary;
   created_at: string;
+  /**
+   * Lifetime turns spent on this trip. Carries NO tier or monthly context —
+   * plan-trip's effective refinements-remaining is tier- and month-aware and
+   * that logic lives entirely server-side, so this number alone is not
+   * enough to derive "remaining" client-side (that math would be wrong by
+   * construction for a free-tier trip). Don't compute a remaining count from
+   * it; the create/refine/undo response envelope's `refinementsRemaining` is
+   * the only source of truth for that, and TripConversation renders
+   * "unknown" (no number) until one of those calls has actually happened
+   * this session.
+   */
+  refinements_used: number;
+  /**
+   * How many undo steps are available (capped at 10 — the guard trigger
+   * trims `revisions` to its newest 10 entries before storing, and this is
+   * generated from the trimmed array). NOT a lifetime turn count: a trip
+   * with 25 refinements still reports 10 here. That's the right number for
+   * "is there anything to undo?" (undo can only reach what's still in
+   * history) but never render it as a count of turns spent — use
+   * `refinements_used` for that, which is monotonic and uncapped.
+   *
+   * Computed server-side from the raw `revisions` jsonb blob so the list
+   * query can carry a plain int instead of that payload (up to 256 KiB, 10
+   * full itineraries) for every trip — `revisions` itself is still
+   * SELECT-able (never revoked), this is purely a payload-size choice, not
+   * a permissions one. Being a generated column, it can never be written by
+   * ANY caller including the service role — Postgres itself rejects a write
+   * naming it — so it can't drift from `revisions`. That guarantee is
+   * specific to this column, though: `version`, `refinements_used`,
+   * `candidate_ids` and `revisions` are ordinary columns that the guard
+   * trigger merely refuses at runtime (raising version_is_server_derived or
+   * not_authorized) if a patch names them. useUpdateTrip is safe against
+   * all of these not because the columns defend themselves uniformly, but
+   * because its patch type is a closed Pick of title/start_date/itinerary —
+   * keep it that way; don't spread a fetched TripPlan row back into a patch
+   * body. Seed TripConversation's Undo availability from this directly; a
+   * saved trip reopened later no longer needs a second per-trip fetch to
+   * know it has history to undo.
+   */
+  revision_count: number;
 }
 
 export function useTripPlans() {
@@ -239,7 +292,7 @@ export function useTripPlans() {
     queryFn: async (): Promise<TripPlan[]> => {
       const { data, error } = await sb()
         .from("trip_plans")
-        .select("id,user_id,title,start_date,invite_code,request,itinerary,created_at")
+        .select("id,user_id,title,start_date,invite_code,request,itinerary,created_at,refinements_used,revision_count")
         .order("created_at", { ascending: false });
       if (error) throw error;
       return (data ?? []) as TripPlan[];
@@ -320,25 +373,133 @@ export async function fetchPlaceBySlug(slug: string) {
   return data as { id: string; slug: string; name: string; city: string | null; region: string | null };
 }
 
-/** Error codes surfaced by the plan-trip function for UI branching. */
-export type PlanTripError = "upgrade_required" | "monthly_limit" | "region_not_found" | "no_places_in_region" | "failed";
+/**
+ * The trip planner's input form, in one shape shared with the plan-trip
+ * function's "create" mode. `styles` carries tag keys sourced from the active
+ * skin's pinFilters (see TripPlannerForm) — the engine never hardcodes what
+ * those keys mean, it just passes through whatever the skin offered.
+ */
+export interface TripBrief {
+  region: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  days: number;
+  rounds: number; // engine-purity-ignore: contract field name defined by the plan-trip function, mirrored here
+  maxHopKm?: number;
+  styles?: string[];
+  includeWishlist?: boolean;
+  avoidPlayed?: boolean;
+  notes?: string;
+}
 
+/** Error codes surfaced by the plan-trip function for UI branching. */
+export type PlanTripError =
+  | "upgrade_required"
+  | "monthly_limit"
+  | "region_not_found"
+  | "no_places_in_region"
+  | "refinement_limit"
+  | "not_owner"
+  | "not_found"
+  | "conflict"
+  | "nothing_to_undo"
+  /**
+   * The plan generated but couldn't be persisted. Previously this landed as
+   * a 200 with `id: null` — a plan that rendered once and then had nowhere
+   * to live (no conversation, no trip-list entry, nothing left to refine).
+   * Now a real error: callers must show a retry and must NOT render the
+   * itinerary that came back, since there's no saved row behind it.
+   */
+  | "save_failed"
+  /** A quota check failed server-side, so the turn was refused rather than spent unmetered. Transient — a retry is the right affordance. */
+  | "quota_unavailable"
+  | "failed";
+
+/** Pulls the typed error code out of a failed functions.invoke() call, falling back to "failed". */
+async function planTripErrorCode(error: unknown): Promise<PlanTripError> {
+  try {
+    const ctx = (error as { context?: Response }).context;
+    if (ctx) return ((await ctx.json()).error as PlanTripError) ?? "failed";
+  } catch {
+    /* keep generic */
+  }
+  return "failed";
+}
+
+/**
+ * plan-trip's response envelope — identical field set across all three
+ * modes, so one type covers create/refine/undo. `changeSummary` is "" on
+ * create; `unmet` is "" unless the candidate set genuinely couldn't satisfy
+ * the request (that's the planner declining rather than inventing — always
+ * worth showing when non-empty). `revisionCount` is the source of truth for
+ * whether Undo has anything to restore; `refinementsUsed`/`refinementsRemaining`
+ * track the per-trip cap, but a monthly cap can also fire a `refinement_limit`
+ * error even while `refinementsRemaining` is still positive, so callers must
+ * handle that error rather than gating solely on the counter.
+ */
+export interface PlanTripResponse {
+  id: string | null;
+  mode: "create" | "refine" | "undo";
+  itinerary: TripItinerary;
+  changeSummary: string;
+  unmet: string;
+  refinementsUsed: number;
+  refinementsRemaining: number;
+  revisionCount: number;
+}
+
+/** Builds a brand-new itinerary from a brief (plan-trip, mode: "create"). */
 export function usePlanTrip() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { region: string; days: number; stops: number; budget: string; notes?: string }) => {
-      const { data, error } = await sb().functions.invoke("plan-trip", { body: input });
-      if (error) {
-        let code: PlanTripError = "failed";
-        try {
-          const ctx = (error as { context?: Response }).context;
-          if (ctx) code = ((await ctx.json()).error as PlanTripError) ?? "failed";
-        } catch {
-          /* keep generic */
-        }
-        throw new Error(code);
-      }
-      return data as { id: string | null; itinerary: TripItinerary };
+    mutationFn: async (input: TripBrief): Promise<PlanTripResponse> => {
+      const { data, error } = await sb().functions.invoke("plan-trip", {
+        body: { mode: "create", input },
+      });
+      if (error) throw new Error(await planTripErrorCode(error));
+      return data as PlanTripResponse;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["trips"] }),
+  });
+}
+
+/**
+ * Applies a free-text tweak to an existing trip (plan-trip, mode: "refine"),
+ * replacing its itinerary in place. Server-side and rate-limited per trip.
+ */
+export function useRefineTripPlan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { tripId: string; instruction: string }): Promise<PlanTripResponse> => {
+      const { data, error } = await sb().functions.invoke("plan-trip", {
+        body: { mode: "refine", tripId: input.tripId, instruction: input.instruction },
+      });
+      if (error) throw new Error(await planTripErrorCode(error));
+      return data as PlanTripResponse;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["trips"] }),
+  });
+}
+
+/**
+ * Restores a trip's previous itinerary (plan-trip, mode: "undo"). The
+ * revision history lives server-side only — the client never holds its own
+ * copy of "the previous itinerary" as a source of truth, since that would
+ * drift the moment another device or trip member refines the same trip.
+ * Makes no model call, so it never consumes a refinement (`refinementsUsed`
+ * comes back unchanged). Can legitimately fail with nothing to undo
+ * (`revisionCount` was already 0); callers should treat that as "hide the
+ * undo control", not as an error to surface.
+ */
+export function useUndoTripPlan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { tripId: string }): Promise<PlanTripResponse> => {
+      const { data, error } = await sb().functions.invoke("plan-trip", {
+        body: { mode: "undo", tripId: input.tripId },
+      });
+      if (error) throw new Error(await planTripErrorCode(error));
+      return data as PlanTripResponse;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["trips"] }),
   });

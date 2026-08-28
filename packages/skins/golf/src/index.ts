@@ -262,6 +262,31 @@ export const golfSkin: Skin = {
     { key: "short", label: "Short (<5,800 yds)", group: "length" },
     { key: "long", label: "Long (>6,800 yds)", group: "length" },
   ],
+  // Trip-planning preferences. Overlaps pinFilters but is NOT the same list --
+  // see the contract note in @marker/core. Two differences, both deliberate:
+  // "Walkable" exists here only (as a map chip it would match ~93% of places),
+  // and the length labels drop their yardage numbers because length is on file
+  // for only ~38% of places, so the planner keeps unknown-length places rather
+  // than excluding them -- a chip promising "<5,800 yds" would overstate what
+  // the preference actually does here.
+  // Every key must have a matching rule in the plan-trip function; a key with
+  // no rule is dropped server-side and reads to the user as a dead control.
+  tripStyles: [
+    { key: "coastal", label: "Coastal" },
+    { key: "wooded", label: "Wooded" },
+    { key: "open", label: "Open" },
+    { key: "desert", label: "Desert" },
+    { key: "mountain", label: "Mountain" },
+    { key: "walkable", label: "Walkable" },
+    { key: "hilly", label: "Hilly" },
+    { key: "windy", label: "Windy" },
+    { key: "short", label: "Shorter" },
+    { key: "long", label: "Longer" },
+    { key: "public", label: "Public" },
+    { key: "private", label: "Private" },
+    { key: "18", label: "18 holes" },
+    { key: "9", label: "9 holes" },
+  ],
   // Outbound quick actions shown on the place detail page. Each url() is a
   // pure function of the place; the engine drops any entry that returns null
   // (e.g. no website on file) rather than rendering a dead link.

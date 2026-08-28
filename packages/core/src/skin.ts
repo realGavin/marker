@@ -229,6 +229,18 @@ export interface Skin {
   conditionKinds: Array<{ key: string; label: string }>;
   /** Filters offered in the map's filter menu; keys match pin-data tags. */
   pinFilters: PinFilter[];
+  /**
+   * Preferences offered when planning a trip. Deliberately a SEPARATE
+   * vocabulary from pinFilters, because the two have different jobs: a map
+   * filter has to partition the catalogue usefully, while a planning
+   * preference can be an exclusion that most places satisfy. "Walkable"
+   * is the case that forced the split -- it means "not a severe climb",
+   * which ~93% of places qualify for, so it is a useless map chip and a
+   * genuinely useful planning constraint. Keys must match what the planner
+   * accepts server-side; a key with no server rule is silently ignored,
+   * which looks to the user like a control that does nothing.
+   */
+  tripStyles: Array<{ key: string; label: string }>;
   /** Section headers for pinFilters, in display order. */
   pinFilterGroups: PinFilterGroup[];
   /**

@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
@@ -19,6 +18,7 @@ import type { TripTemplate } from "@marker/core";
 import { skin } from "../../skin";
 import { colors, radii, spacing, type } from "../../ui/theme";
 import { searchPins } from "../../lib/pins";
+import { dayDate, localDateString } from "../../lib/dates";
 import { useAuth } from "../../providers/auth";
 import {
   fetchPlaceBySlug,
@@ -46,12 +46,15 @@ import {
   visitErrorMessage,
   type Friend,
   type PublishedTrip,
+  type TripBrief,
   type TripItinerary,
   type TripPlan,
 } from "../../lib/data";
 import { reconcileReminders } from "../../lib/reminders";
 import { FriendPickerSheet } from "../../ui/FriendPickerSheet";
 import { PostVisitSheet } from "../../ui/PostVisitSheet";
+import { TripConversation } from "../../ui/TripConversation";
+import { TripPlannerForm } from "../../ui/TripPlannerForm";
 import { VisitTimeRow } from "../../ui/VisitTimeRow";
 
 const COMMUNITY_TERMS_KEY = "marker.communityTermsAcceptedAt";
@@ -109,71 +112,6 @@ async function ensureCommunityTermsAccepted(): Promise<boolean> {
       ],
     );
   });
-}
-
-/** Labeled +/- numeric control — friendlier than a bare keyboard field. */
-function Stepper({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  min: number;
-  max: number;
-}) {
-  const n = Number(value) || min;
-  const set = (next: number) => onChange(String(Math.min(max, Math.max(min, next))));
-  return (
-    <View style={styles.stepper}>
-      <Text style={type.caption}>{label}</Text>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-        <Pressable style={styles.stepperButton} onPress={() => set(n - 1)} hitSlop={6}>
-          <Ionicons name="remove" size={18} color={colors.primary} />
-        </Pressable>
-        <Text style={styles.stepperValue}>{n}</Text>
-        <Pressable style={styles.stepperButton} onPress={() => set(n + 1)} hitSlop={6}>
-          <Ionicons name="add" size={18} color={colors.primary} />
-        </Pressable>
-      </View>
-    </View>
-  );
-}
-
-/** YYYY-MM-DD in local time (Date#toISOString is UTC and shifts the day for non-UTC users). */
-function localDateString(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-/** Date for a given 1-based trip day, from the trip's start date. */
-function dayDate(startDate: string | null | undefined, day: number): string | null {
-  if (!startDate) return null;
-  const d = new Date(startDate + "T12:00:00");
-  if (Number.isNaN(d.getTime())) return null;
-  d.setDate(d.getDate() + (day - 1));
-  return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-}
-
-const BUDGETS = ["any", "$", "$$", "$$$"] as const;
-
-const LOADING_LINES = [
-  "Reading the map…",
-  "Pacing out your days…",
-  "Weighing the drive times…",
-  "Putting the route in order…",
-];
-
-function LoadingLine() {
-  const [i, setI] = useState(0);
-  React.useEffect(() => {
-    const t = setInterval(() => setI((n) => (n + 1) % LOADING_LINES.length), 2500);
-    return () => clearInterval(t);
-  }, []);
-  return <Text style={{ color: "#FFF", fontSize: 15, fontWeight: "600" }}>{LOADING_LINES[i]}</Text>;
 }
 
 export default function TripsScreen() {
@@ -272,26 +210,36 @@ export default function TripsScreen() {
     setPostVisitTarget(null);
   };
 
-  const [region, setRegion] = useState("");
-  const [days, setDays] = useState("3");
-  const [stops, setStops] = useState("3");
-  const [budget, setBudget] = useState<(typeof BUDGETS)[number]>("any");
-  const [notes, setNotes] = useState("");
   const [result, setResult] = useState<TripItinerary | null>(null);
+  const [resultTitle, setResultTitle] = useState<string | undefined>(undefined);
+  const [tripId, setTripId] = useState<string | null>(null);
+  const [refinementsRemaining, setRefinementsRemaining] = useState<number | null>(null);
+  const [revisionCount, setRevisionCount] = useState(0);
+  const [unmet, setUnmet] = useState<string | undefined>(undefined);
   const [errorText, setErrorText] = useState<string | null>(null);
+  // Bumping the nonce forces TripPlannerForm to remount with fresh initial
+  // values — the simplest way to re-seed an uncontrolled form from "Tune it".
+  const [prefill, setPrefill] = useState<{ region: string; days: number; nonce: number }>({
+    region: "",
+    days: 3,
+    nonce: 0,
+  });
 
-  const generate = async () => {
+  const generate = async (brief: TripBrief) => {
     setErrorText(null);
     setResult(null);
+    setTripId(null);
+    setRefinementsRemaining(null);
+    setRevisionCount(0);
+    setUnmet(undefined);
     try {
-      const res = await planTrip.mutateAsync({
-        region,
-        days: Number(days) || 3,
-        stops: Number(stops) || 3,
-        budget,
-        notes: notes || undefined,
-      });
+      const res = await planTrip.mutateAsync(brief);
       setResult(res.itinerary);
+      setTripId(res.id);
+      setRefinementsRemaining(res.refinementsRemaining);
+      setRevisionCount(res.revisionCount);
+      setUnmet(res.unmet || undefined);
+      setResultTitle(brief.region.trim() || undefined);
     } catch (e) {
       const code = (e as Error).message;
       if (code === "upgrade_required") {
@@ -300,6 +248,14 @@ export default function TripsScreen() {
         setErrorText("You've used this month's plans. Resets on the 1st.");
       } else if (code === "region_not_found" || code === "no_places_in_region") {
         setErrorText(`We couldn't find that area — try a city or state name.`);
+      } else if (code === "save_failed") {
+        // The itinerary generated but never got a saved row — result/tripId
+        // are only ever set in the try block above, so nothing renders here.
+        // Surface it as a plain retry rather than the generic message: this
+        // one cost a model call and produced nothing to show for it.
+        setErrorText("We built a plan but couldn't save it. Try again.");
+      } else if (code === "quota_unavailable") {
+        setErrorText("Couldn't check your plan allowance. Try again in a moment.");
       } else {
         setErrorText("Something went wrong building your trip. Try again.");
       }
@@ -356,57 +312,30 @@ export default function TripsScreen() {
           </View>
         )}
 
-        <View style={styles.form}>
-          <TextInput
-            style={styles.input}
-            placeholder="Where to? (city or state)"
-            placeholderTextColor={colors.textSecondary}
-            value={region}
-            onChangeText={setRegion}
-          />
-          <View style={{ flexDirection: "row", gap: spacing.sm }}>
-            <Stepper label="Days" value={days} onChange={setDays} min={1} max={14} />
-            <Stepper label={skin.vocab.tripStops} value={stops} onChange={setStops} min={1} max={20} />
-          </View>
-          <View style={styles.budgetRow}>
-            {BUDGETS.map((b) => (
-              <Pressable
-                key={b}
-                style={[styles.budgetChip, budget === b && styles.budgetActive]}
-                onPress={() => setBudget(b)}
-              >
-                <Text style={[styles.budgetText, budget === b && { color: "#FFF" }]}>
-                  {b === "any" ? "Any budget" : b}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-          <TextInput
-            style={[styles.input, { minHeight: 60 }]}
-            placeholder={skin.vocab.tripNotesHint}
-            placeholderTextColor={colors.textSecondary}
-            value={notes}
-            onChangeText={setNotes}
-            multiline
-          />
-          <Pressable
-            style={[styles.generate, (planTrip.isPending || !region.trim()) && { opacity: 0.5 }]}
-            onPress={generate}
-            disabled={planTrip.isPending || !region.trim()}
-          >
-            {planTrip.isPending ? (
-              <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
-                <ActivityIndicator color="#FFF" />
-                <LoadingLine />
-              </View>
-            ) : (
-              <Text style={styles.generateText}>Build my trip</Text>
-            )}
-          </Pressable>
-          {errorText ? <Text style={[type.caption, { color: "#B4552D" }]}>{errorText}</Text> : null}
-        </View>
+        <TripPlannerForm
+          key={prefill.nonce}
+          initialRegion={prefill.region}
+          initialDays={prefill.days}
+          pending={planTrip.isPending}
+          errorText={errorText}
+          onSubmit={generate}
+        />
 
-        {result && <Itinerary itinerary={result} title={region.trim() || undefined} />}
+        {result && (
+          <>
+            <Itinerary itinerary={result} title={resultTitle} />
+            {tripId && (
+              <TripConversation
+                tripId={tripId}
+                itinerary={result}
+                initialRefinementsRemaining={refinementsRemaining}
+                initialRevisionCount={revisionCount}
+                initialUnmet={unmet}
+                onApply={setResult}
+              />
+            )}
+          </>
+        )}
 
         <CommunityTripsSection />
 
@@ -418,11 +347,9 @@ export default function TripsScreen() {
           <TemplateCard
             key={t.slug}
             template={t}
-            onTune={(tuneRegion, tuneDays) => {
-              setRegion(tuneRegion);
-              setDays(String(tuneDays));
-              setStops(String(tuneDays));
-            }}
+            onTune={(tuneRegion, tuneDays) =>
+              setPrefill((p) => ({ region: tuneRegion, days: tuneDays, nonce: p.nonce + 1 }))
+            }
           />
         ))}
 
@@ -551,19 +478,32 @@ function Itinerary({
             DAY {d.day}{dayDate(startDate, d.day) ? ` · ${dayDate(startDate, d.day)}` : ""}
           </Text>
           {d.places.map((p) => (
-            <Pressable
-              key={p.id}
-              style={styles.placeRow}
-              onPress={() => router.push(`/place/${p.slug}`)}
-            >
-              <Ionicons name="flag" size={14} color={colors.accent} />
-              <View style={{ flex: 1 }}>
-                <Text style={type.body} numberOfLines={1}>{p.name}</Text>
-                <Text style={type.caption}>{[p.city, p.region].filter(Boolean).join(", ")}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
-            </Pressable>
+            <View key={p.id}>
+              <Pressable
+                style={styles.placeRow}
+                onPress={() => router.push(`/place/${p.slug}`)}
+              >
+                <Ionicons name="flag" size={14} color={colors.accent} />
+                <View style={{ flex: 1 }}>
+                  <Text style={type.body} numberOfLines={1}>{p.name}</Text>
+                  <Text style={type.caption}>{[p.city, p.region].filter(Boolean).join(", ")}</Text>
+                  {p.why ? <Text style={[type.caption, { marginTop: 2, fontStyle: "italic" }]}>{p.why}</Text> : null}
+                </View>
+                <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
+              </Pressable>
+              {p.nextHopKm != null && (
+                // Straight-line distance, not a driving distance — we hold no
+                // routing data, and a great-circle number can understate the
+                // real road distance by 20-40%+ in hilly terrain. Same rule
+                // that keeps this app from showing a booking link or a
+                // travel-time estimate: don't imply support we don't have.
+                <Text style={[type.caption, { marginLeft: 22, marginBottom: 2 }]}>
+                  ↓ {Math.round(p.nextHopKm)} km apart
+                </Text>
+              )}
+            </View>
           ))}
+          {d.seasonNote ? <Text style={[type.caption, { marginTop: 4, color: colors.accent }]}>{d.seasonNote}</Text> : null}
           {d.note ? <Text style={[type.caption, { marginTop: 4 }]}>{d.note}</Text> : null}
         </View>
       ))}
@@ -729,6 +669,26 @@ function TripCard({ plan }: { plan: TripPlan }) {
   const title = plan.title ?? plan.request.region;
   const isPublished = (publishedTrips ?? []).some((t) => t.id === plan.id);
 
+  // The conversation can replace this trip's itinerary in place, ahead of
+  // the ["trips"] query refetching. `appliedJson` keeps a server refresh
+  // from clobbering a change made moments ago via this exact card, without
+  // latching forever the way a plain "dirty" boolean would: a refetch that
+  // just confirms our own edit is a no-op, but a genuinely different server
+  // value (a refine from another device or trip member) still gets through
+  // and re-syncs.
+  const [itinerary, setItinerary] = useState(plan.itinerary);
+  const appliedJson = useRef(JSON.stringify(plan.itinerary));
+  useEffect(() => {
+    const incoming = JSON.stringify(plan.itinerary);
+    if (incoming === appliedJson.current) return;
+    appliedJson.current = incoming;
+    setItinerary(plan.itinerary);
+  }, [plan.itinerary]);
+  const applyItinerary = (next: TripItinerary) => {
+    appliedJson.current = JSON.stringify(next);
+    setItinerary(next);
+  };
+
   const inviteFriend = async (friend: Friend) => {
     setInvitingFriendId(friend.friend_id);
     try {
@@ -806,7 +766,7 @@ function TripCard({ plan }: { plan: TripPlan }) {
           </View>
           <Text style={type.caption}>
             {plan.start_date ? `${dayDate(plan.start_date, 1)} · ` : ""}
-            {plan.itinerary.days.length} days · {plan.itinerary.days.reduce((n, d) => n + d.places.length, 0)} stops
+            {itinerary.days.length} days · {itinerary.days.reduce((n, d) => n + d.places.length, 0)} stops
           </Text>
         </View>
         <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.textSecondary} />
@@ -851,7 +811,22 @@ function TripCard({ plan }: { plan: TripPlan }) {
               </Pressable>
             )}
           </View>
-          <Itinerary itinerary={plan.itinerary} title={title} startDate={plan.start_date} />
+          <Itinerary itinerary={itinerary} title={title} startDate={plan.start_date} />
+          {isOwner && (
+            <TripConversation
+              tripId={plan.id}
+              itinerary={itinerary}
+              // Straight off the trip row's generated column — no second
+              // fetch, no gating on the card being open. Undo now appears
+              // correctly for turns spent in a previous session. Falls back
+              // to 0 (Undo hidden) only if the column is ever genuinely
+              // absent, never a stand-in for "we don't know" — a load
+              // failure hides the whole card, not just this number, same
+              // fail-soft posture as the rest of the app.
+              initialRevisionCount={plan.revision_count ?? 0}
+              onApply={applyItinerary}
+            />
+          )}
         </>
       )}
       {open && editing && <TripEditor plan={plan} onDone={() => setEditing(false)} />}
@@ -1156,7 +1131,6 @@ function TemplateCard({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  form: { gap: spacing.sm },
   input: {
     borderWidth: 1,
     borderColor: "#DADAD6",
@@ -1167,19 +1141,6 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 15,
   },
-  budgetRow: { flexDirection: "row", gap: spacing.xs },
-  budgetChip: {
-    paddingHorizontal: spacing.md,
-    height: 34,
-    borderRadius: 3,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surface,
-  },
-  budgetActive: { backgroundColor: colors.primary },
-  budgetText: { fontSize: 13, fontWeight: "600", color: colors.primary },
   generate: {
     height: 50,
     borderRadius: 4,
@@ -1290,25 +1251,4 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.surface,
   },
-  stepper: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: "#DADAD6",
-    borderRadius: 3,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    backgroundColor: colors.surface,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  stepperButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 4,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#EDEDEA",
-  },
-  stepperValue: { fontSize: 16, fontWeight: "700", color: colors.textPrimary, minWidth: 20, textAlign: "center" },
 });
