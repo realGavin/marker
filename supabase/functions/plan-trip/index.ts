@@ -1357,8 +1357,14 @@ async function create(
   // because presence alone would also match the back-compat wire shape this
   // function still accepts twenty lines below, where a bare body posts `stops`
   // with no `rounds` -- and those are real, paid creates. useCreateTrip hardcodes
-  // stops: 0, a real brief never asks for zero rounds, so the value separates them
-  // where the key does not. Against the current client the question does not
+  // stops: 0, and TripPlannerForm's stepper floors at 1, so the value separates
+  // them where the key does not. Note the scope of that second clause: it is a
+  // fact about the FORM, not an impossibility. The back-compat path bypasses the
+  // form, so a bare body carrying an explicit stops: 0 would be a real create that
+  // the predicate excludes -- RESIDUAL, ACCEPTED: it needs a brief asking for zero
+  // rounds, nothing in the app can emit one, and it fails in the give-away-a-free-
+  // plan direction like every other miss here. Recorded so it is not later
+  // mistaken for a new defect. Against the current client the question does not
   // arise: TripBrief (apps/mobile/src/lib/data.ts) carries `rounds` and never
   // `stops`.
   //
