@@ -490,16 +490,57 @@ begin
 
     -- THE BUMP. Every write that changes state a server write also writes.
     -- itinerary is in this list because the hand-edit race above is the whole
-    -- point of the column. title and start_date are NOT, on purpose: no server
-    -- write overwrites them, so bumping on a rename would only make honest
-    -- refinements lose a CAS they had no reason to lose. candidate_ids is not
-    -- listed either -- it is only ever written in the same statement as
-    -- itinerary and refinements_used (the rehydrate write), so it can never
-    -- change without one of these four changing with it.
+    -- point of the column.
+    --
+    -- candidate_ids is in it too, and the reason is worth stating because an
+    -- earlier draft left it out. The justification for omitting it was "nothing
+    -- ever writes it alone -- plan-trip only sets it in the rehydrate write,
+    -- alongside itinerary and refinements_used". That is TRUE TODAY and it is a
+    -- fact about the current edge function, NOT a property of this schema:
+    -- nothing here stops a service-role write from touching candidate_ids by
+    -- itself. A later re-grounding job, repair script or backfill that did so
+    -- would leave version unmoved, and a stale refine's CAS would still match --
+    -- silently defeating the concurrency guard for the exact column the rest of
+    -- this file exists to protect. A soft absolute is bad anywhere; in the CAS
+    -- contract it is the worst place to put one.
+    -- Listing it costs nothing. No write today changes candidate_ids without
+    -- also changing itinerary and refinements_used, so no CAS that passes now
+    -- starts failing. And if some future write ever does change it alone, a 409
+    -- is the CORRECT answer, because a changed grounding set genuinely
+    -- invalidates any refinement still in flight against the old one.
+    --
+    -- title and start_date are NOT in the list, on purpose: no server write
+    -- overwrites them, so bumping on a rename would only make honest
+    -- refinements lose a CAS they had no reason to lose.
+    --
+    -- `revisions` IS LOAD-BEARING HERE IN A WAY THAT IS NOT OBVIOUS, and the
+    -- mirror of the candidate_ids point above: a WRITE that fails to bump is
+    -- the same defect as a COLUMN that fails to bump. It is what makes the
+    -- refine COMMIT bump on a DECLINE turn. When the model declines an
+    -- instruction it returns the plan unchanged, so the committed itinerary can
+    -- be jsonb-equal to the stored one and `is distinct from` finds nothing on
+    -- that column. The bump then rests ENTIRELY on revisions -- which holds,
+    -- because the commit's append is unconditional and every entry carries a
+    -- fresh `at` timestamp, so the array differs even when the itinerary does
+    -- not. Verified against plan-trip's three UPDATE bodies: undo
+    -- {itinerary, revisions}, refine claim {refinements_used, ...}, refine
+    -- commit {itinerary, revisions}.
+    -- SO: do NOT drop revisions from this list on the reasoning that it only
+    -- ever changes alongside itinerary. It does not, and declines would
+    -- silently stop bumping -- the same stale-CAS hole this column exists to
+    -- close, reached by a different route.
+    --
+    -- ORDERING, also load-bearing: this bump is computed BEFORE the revisions
+    -- trim in the caps section below, so it compares the array AS SUPPLIED. An
+    -- eleventh entry appended to a full history therefore bumps even though the
+    -- trim is about to drop the oldest one. Moving the trim above this block
+    -- would not change that outcome today, but it would make the bump depend on
+    -- trim behaviour, which is a coupling worth not having.
     if new.itinerary        is distinct from old.itinerary
     or new.revisions        is distinct from old.revisions
     or new.refinements_used is distinct from old.refinements_used
-    or new.brief            is distinct from old.brief then
+    or new.brief            is distinct from old.brief
+    or new.candidate_ids    is distinct from old.candidate_ids then
       new.version := old.version + 1;
     end if;
 
@@ -1117,8 +1158,9 @@ select tp.user_id, tp.id, 'create', tp.created_at
 --    useUpdateTrip does not change the counter either, so a concurrent refine
 --    overwrites a member's edit wholesale, and item 6 means undo cannot get it
 --    back; and refine-vs-refine cannot be told from nothing-happened. version
---    moves on every write that touches itinerary, revisions, refinements_used
---    or brief, so a stale writer's filter matches zero rows and PostgREST
+--    moves on every write that touches itinerary, revisions, refinements_used,
+--    brief or candidate_ids, so a stale writer's filter matches zero rows and
+--    PostgREST
 --    returns an empty representation the edge function reads as 409.
 --    WHAT IT IS NOT. Not a lock -- it is optimistic, the loser refetches and
 --    retries, and a turn whose tokens were already spent is lost rather than

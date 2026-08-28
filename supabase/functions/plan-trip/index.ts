@@ -1208,6 +1208,24 @@ async function refine(
   // the model was thinking (a hand edit by a trip member, an undo), and the safe
   // answer is to keep their write and tell the client to refetch. The turn stays
   // spent, which is correct: we paid for it.
+  //
+  // THE `revisions` APPEND ABOVE IS LOAD-BEARING FOR CONCURRENCY, not just for
+  // undo, and it is not obvious from here. The trigger bumps `version` only when
+  // one of its watched columns actually changed. On a DECLINE turn the model
+  // returns the plan unmodified, so `built` can be jsonb-equal to the stored
+  // itinerary and contribute no difference at all — and the bump then rests
+  // ENTIRELY on `revisions`, which always differs because the append is
+  // unconditional and each entry carries a fresh `at`. (Confirmed against the
+  // trigger: the bump is computed above the history trim, so it compares the
+  // array as supplied.)
+  //
+  // So do NOT "optimise" this into skipping the revisions write when nothing
+  // changed. It reads as free — why record a revision for a turn that changed
+  // nothing — and it would silently stop bumping version on exactly those turns,
+  // leaving a stale CAS from a concurrent refine still matching. That is the same
+  // hole the five-column bump list closes from the schema side, reopened from
+  // this one. A WRITE that fails to bump is the same defect as a COLUMN that
+  // fails to bump.
   const committed = await casPatch(tripId, Number(claimed.version ?? 0), { itinerary: built, revisions });
   if (!committed) return json({ error: "conflict" }, 409);
 
