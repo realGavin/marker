@@ -35,12 +35,18 @@
 --     run does not re-add its CHECK or its foreign keys.
 --   * `alter table ... enable row level security` is idempotent.
 --
--- STATIC REVIEW ONLY. There is no local Postgres on this machine. Nothing here
--- has been executed, EXPLAINed, or tested against a live database; everything
--- below -- including the adversarial pass at the bottom -- is a static reading
--- of this file plus the already-applied migrations it depends on, plus the
--- documented behaviour of the constructs used. Gavin applies migrations by
--- hand: treat the first apply as the first execution.
+-- STATIC REVIEW ONLY, WITH ONE NARROW EXCEPTION. There is no local Postgres on
+-- this machine. No statement in this file has been executed, EXPLAINed, or
+-- tested against a live database; everything below -- including the adversarial
+-- pass at the bottom -- is a static reading of this file plus the
+-- already-applied migrations it depends on, plus the documented behaviour of
+-- the constructs used. Gavin applies migrations by hand: treat the first apply
+-- as the first execution.
+-- THE EXCEPTION, so the claim above stays honest: the shape of existing
+-- `trip_plans.request` payloads was checked with a READ-ONLY query against
+-- production while choosing the plan_turns backfill predicate -- that is where
+-- "production holds such a row with stops=3" comes from. Data was read; nothing
+-- was written and no DDL here was run.
 --
 -- DEPENDS ON (all applied, none edited here):
 --   20260724000001_core_schema.sql       -- public.trip_plans, its RLS, request/itinerary
@@ -801,8 +807,10 @@ revoke all on public.plan_turns from anon, authenticated;
 --     not copying the author's, so `adopted_from` is present on exactly these
 --     rows and on nothing else.
 --   * apps/mobile's useCreateTrip -- the "adopt a template" flow, which INSERTs
---     `request = {region, days, stops}` directly. Identified by shape rather
---     than by a marker, which is weaker; see the bias note below.
+--     `request = {region, days, stops: 0}` directly. Identified by shape rather
+--     than by a marker, so it is keyed on the literal `stops = 0` and not on
+--     the key merely being present -- the previous planner form also sent
+--     `stops`, on genuine paid creates. See the predicate's own comment.
 -- Going forward NEITHER writes a plan_turns row, because only plan-trip does.
 -- So backfilling them would put rows in this ledger that the ledger's own writer
 -- would never write, and the count would stop meaning what the column says.
@@ -820,6 +828,28 @@ revoke all on public.plan_turns from anon, authenticated;
 -- WITHHOLD a receipt, never invent one. If the shape test misfires on a genuine
 -- plan-trip row the cost is one un-metered plan for one user, once. There is no
 -- input to this statement that causes it to over-charge anybody.
+--
+-- REJECTED ALTERNATIVE, written down because it is the cleverest-looking answer
+-- and it will be proposed again: `and cardinality(tp.candidate_ids) > 0` as
+-- POSITIVE PROOF that plan-trip created the row. The logic is sound in
+-- isolation -- the INSERT guard above forces candidate_ids empty for every
+-- non-service-role writer, so a non-empty value cannot come from adopt_trip()
+-- or useCreateTrip, and a genuine create always has at least one candidate
+-- because plan-trip 422s on an empty region before it inserts.
+-- IT IS NONETHELESS FATAL HERE, for a reason that has nothing to do with the
+-- logic and everything to do with WHERE IT SITS. candidate_ids is added by THIS
+-- FILE, a few hundred lines above, with `default '{}'`. Every row that exists
+-- when this statement runs was written before the column did, so every row has
+-- cardinality 0, and the predicate matches NOTHING. The backfill would insert
+-- zero rows and hand every existing user a complete quota reset -- precisely
+-- the giveaway it was written to prevent, delivered by the guard meant to
+-- prevent it, with no error anywhere. The test only carries information for
+-- rows created AFTER this migration, which are exactly the rows that need no
+-- backfill.
+-- THE GENERAL LESSON, since this file will grow more backfills: a backfill
+-- predicate may only read columns that already held real data BEFORE this
+-- migration ran. A column this migration adds is uniformly its default at that
+-- moment, and reading it tells you nothing about history.
 -- ===========================================================================
 insert into public.plan_turns (user_id, trip_id, kind, created_at)
 select tp.user_id, tp.id, 'create', tp.created_at
