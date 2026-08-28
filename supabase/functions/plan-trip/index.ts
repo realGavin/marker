@@ -1352,15 +1352,29 @@ async function create(
   // plan, once. A wrongly-written one costs a user their trial with no recourse.
   // Keep any future change to this backfill biased the same way.
   //
-  // The `stops`-without-`rounds` half of that test discriminates correctly against
-  // the CURRENT client -- TripBrief (apps/mobile/src/lib/data.ts) carries `rounds`
-  // and never `stops`, while useCreateTrip carries `stops` and never `rounds`. It
-  // does NOT discriminate against the back-compat wire shape this function still
-  // accepts twenty lines below, where a bare body posts `stops` with no `rounds`;
-  // such a row is a real, paid create and is excluded anyway. Safe direction, so
-  // it stands, but the structural test is cardinality(candidate_ids) > 0: the
-  // INSERT guard forces that column empty for every non-service-role writer, so a
-  // non-empty value is positive proof this function created the row.
+  // The template-adoption test keys on the VALUE, not on the key being present:
+  // `not jsonb_exists(request,'rounds') and request->>'stops' = '0'`. That matters
+  // because presence alone would also match the back-compat wire shape this
+  // function still accepts twenty lines below, where a bare body posts `stops`
+  // with no `rounds` -- and those are real, paid creates. useCreateTrip hardcodes
+  // stops: 0, a real brief never asks for zero rounds, so the value separates them
+  // where the key does not. Against the current client the question does not
+  // arise: TripBrief (apps/mobile/src/lib/data.ts) carries `rounds` and never
+  // `stops`.
+  //
+  // DO NOT "IMPROVE" THIS INTO cardinality(candidate_ids) > 0. It reads as the
+  // stronger, structural test -- the INSERT guard forces that column empty for
+  // every non-service-role writer, so a non-empty value really is proof this
+  // function wrote the row -- and it is still wrong here, for a reason that is
+  // nothing to do with the logic. candidate_ids is ADDED BY THIS SAME MIGRATION,
+  // a few hundred lines above the backfill, `not null default '{}'`. Every row in
+  // existence when the backfill runs predates the column and is therefore
+  // uniformly empty, so the predicate matches zero rows: the backfill inserts
+  // nothing and every existing user silently gets a full quota reset, which is the
+  // exact giveaway the exclusion exists to prevent. The general rule, worth
+  // carrying to any backfill: a backfill predicate may only read columns that
+  // already held real data BEFORE the migration ran. A column the migration itself
+  // adds is uniformly its default at that instant and carries no history.
   const usedPlans = await turnsTaken(userId, "create", isPro ? monthStart : null);
   if (!isPro && usedPlans >= FREE_TRIAL_PLANS) return json({ error: "upgrade_required" }, 402);
   if (isPro && usedPlans >= PRO_PLANS_PER_MONTH) return json({ error: "monthly_limit" }, 429);

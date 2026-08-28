@@ -864,7 +864,13 @@ select tp.user_id, tp.id, 'create', tp.created_at
    -- the PREVIOUS planner form also sent `stops` (alongside budget/notes), and
    -- production holds such a row with stops=3. That is a real generated plan
    -- and must be metered; excluding it would hand that user a free plan.
-   -- A planned trip can never have 0 stops (the form's stepper floors at 1).
+   -- TripPlannerForm cannot produce 0 -- its stepper floors at 1 -- so no create
+   -- from the current client is caught by this. RESIDUAL, ACCEPTED: the
+   -- back-compat wire shape bypasses the form, so a body explicitly posting
+   -- stops: 0 would be a real create that loses its receipt. It requires a brief
+   -- asking for zero rounds, nothing in the app can emit it, and it fails in the
+   -- give-away-a-free-plan direction like every other miss here. Recorded so it
+   -- is not later mistaken for a new defect.
    and not (
          not jsonb_exists(tp.request, 'rounds')
      and tp.request ->> 'stops' = '0'
