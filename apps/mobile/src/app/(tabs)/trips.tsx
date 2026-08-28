@@ -22,12 +22,14 @@ import { searchPins } from "../../lib/pins";
 import { useAuth } from "../../providers/auth";
 import {
   fetchPlaceBySlug,
+  friendErrorMessage,
   useAdoptTrip,
   useBlockUser,
   useCreateTrip,
   useDeleteTrip,
-  useDeleteVisitTime,
+  useInviteFriendToTrip,
   useJoinTrip,
+  useJoinVisitTime,
   useMyLogs,
   usePlanTrip,
   usePublishedTrips,
@@ -41,12 +43,16 @@ import {
   useUpsertLog,
   useVisitTimes,
   useVoteTrip,
+  visitErrorMessage,
+  type Friend,
   type PublishedTrip,
   type TripItinerary,
   type TripPlan,
 } from "../../lib/data";
-import { cancelVisitReminders, reconcileReminders } from "../../lib/reminders";
+import { reconcileReminders } from "../../lib/reminders";
+import { FriendPickerSheet } from "../../ui/FriendPickerSheet";
 import { PostVisitSheet } from "../../ui/PostVisitSheet";
+import { VisitTimeRow } from "../../ui/VisitTimeRow";
 
 const COMMUNITY_TERMS_KEY = "marker.communityTermsAcceptedAt";
 const POST_VISIT_PROMPTED_KEY = "marker.postVisitPrompted";
@@ -172,13 +178,18 @@ function LoadingLine() {
 
 export default function TripsScreen() {
   const router = useRouter();
+  const scrollRef = useRef<ScrollView>(null);
   const { data: savedPlans } = useTripPlans();
   const planTrip = usePlanTrip();
   const joinTrip = useJoinTrip();
   const { data: visitTimes } = useVisitTimes();
-  const deleteVisitTime = useDeleteVisitTime();
+  const joinVisitTime = useJoinVisitTime();
   const upcoming = (visitTimes ?? []).filter((v) => new Date(v.at).getTime() > Date.now());
 
+  // cancelLegacyReminders now runs once at app start in the root Gate
+  // component (apps/mobile/src/app/_layout.tsx) rather than here, since Expo
+  // Router tabs are lazy and a tester who never opens Trips would otherwise
+  // keep legacy alarms queued forever.
   useEffect(() => {
     if (visitTimes) reconcileReminders(visitTimes).catch(() => {});
   }, [visitTimes]);
@@ -235,9 +246,14 @@ export default function TripsScreen() {
   const ratedPlaceIds = new Set((myLogs ?? []).filter((l) => l.rating != null).map((l) => l.place_id));
   const pastPrompts = promptedIds && myLogs !== undefined
     ? (visitTimes ?? []).filter((v) => {
+        // Only the visit's owner actually went — someone who merely joined a
+        // friend's visit and never showed up shouldn't be nudged into rating
+        // a place they didn't play, which would write a real number into
+        // its public average.
+        if (!v.is_owner) return false;
         const age = Date.now() - new Date(v.at).getTime();
         if (age < PAST_PROMPT_MIN_AGE_MS || age > PAST_PROMPT_MAX_AGE_MS) return false;
-        if (ratedPlaceIds.has(v.place.id)) return false;
+        if (ratedPlaceIds.has(v.place_id)) return false;
         if (promptedIds.has(v.id)) return false;
         return true;
       })
@@ -292,7 +308,11 @@ export default function TripsScreen() {
 
   return (
     <>
-      <ScrollView style={styles.container} contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl * 2 }}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.container}
+        contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl * 2 }}
+      >
         <Text style={type.title}>{skin.vocab.planTrip}</Text>
         <Text style={[type.caption, { marginTop: spacing.xs, marginBottom: spacing.md }]}>
           Real {skin.vocab.places} from our directory — never invented.
@@ -302,30 +322,7 @@ export default function TripsScreen() {
           <View style={[styles.templateCard, { marginBottom: spacing.md }]}>
             <Text style={type.heading}>Upcoming {skin.vocab.visitTimes.toLowerCase()}</Text>
             {upcoming.map((v) => (
-              <View key={v.id} style={styles.placeRow}>
-                <Ionicons name="alarm" size={15} color={colors.accent} />
-                <Pressable style={{ flex: 1 }} onPress={() => router.push(`/place/${v.place.slug}`)}>
-                  <Text style={type.body} numberOfLines={1}>{v.place.name}</Text>
-                  <Text style={type.caption}>
-                    {new Date(v.at).toLocaleString([], {
-                      weekday: "short",
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  hitSlop={8}
-                  onPress={() => {
-                    deleteVisitTime.mutate(v.id);
-                    cancelVisitReminders(v.id).catch(() => {});
-                  }}
-                >
-                  <Ionicons name="close-circle-outline" size={18} color={colors.textSecondary} />
-                </Pressable>
-              </View>
+              <VisitTimeRow key={v.id} visit={v} onPressPlace={() => router.push(`/place/${v.place_slug}`)} />
             ))}
           </View>
         )}
@@ -338,9 +335,9 @@ export default function TripsScreen() {
                 <Ionicons name="star-outline" size={15} color={colors.accent} />
                 <Pressable
                   style={{ flex: 1 }}
-                  onPress={() => setPostVisitTarget({ id: v.id, placeId: v.place.id })}
+                  onPress={() => setPostVisitTarget({ id: v.id, placeId: v.place_id })}
                 >
-                  <Text style={type.body} numberOfLines={1}>{v.place.name}</Text>
+                  <Text style={type.body} numberOfLines={1}>{v.place_name}</Text>
                   <Text style={type.caption}>
                     {new Date(v.at).toLocaleString([], {
                       weekday: "short",
@@ -429,8 +426,38 @@ export default function TripsScreen() {
           />
         ))}
 
-        <View style={{ flexDirection: "row", alignItems: "center", marginTop: spacing.xl, marginBottom: spacing.sm }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.xl, marginBottom: spacing.sm }}>
           <Text style={[type.heading, { flex: 1 }]}>Your trips</Text>
+          <Pressable
+            style={styles.joinButton}
+            onPress={() =>
+              Alert.prompt(
+                `Join a ${skin.vocab.visitTime.toLowerCase()} reminder`,
+                "Enter the invite code",
+                async (code) => {
+                  if (!code?.trim()) return;
+                  try {
+                    await joinVisitTime.mutateAsync(code.trim());
+                    // The joined row lands in the "Upcoming" card at the very
+                    // top of this screen, which for a first-time joiner did
+                    // not exist a moment ago — without this, tapping the
+                    // button appears to do nothing.
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+                    scrollRef.current?.scrollTo({ y: 0, animated: true });
+                    Alert.alert(
+                      "You're in",
+                      `It's now under "Upcoming ${skin.vocab.visitTimes.toLowerCase()}" above. You'll get your own reminder, timed to your own travel time, once you open the app again closer to the day.`,
+                    );
+                  } catch (e) {
+                    Alert.alert("Couldn't join", visitErrorMessage((e as Error).message, "join"));
+                  }
+                },
+              )
+            }
+          >
+            <Ionicons name="alarm-outline" size={15} color={colors.primary} />
+            <Text style={styles.joinButtonText}>Join a {skin.vocab.visitTime.toLowerCase()} reminder</Text>
+          </Pressable>
           <Pressable
             style={styles.joinButton}
             onPress={() =>
@@ -685,18 +712,34 @@ function CommunityTripCard({ trip }: { trip: PublishedTrip }) {
   );
 }
 
-/** A saved trip: viewable, editable, and shareable with friends by code. */
+/** A saved trip: viewable, editable, and shareable with friends by code or by picking one. */
 function TripCard({ plan }: { plan: TripPlan }) {
   const { session } = useAuth();
   const deleteTrip = useDeleteTrip();
   const publishTrip = usePublishTrip();
   const unpublishTrip = useUnpublishTrip();
+  const inviteFriendToTrip = useInviteFriendToTrip();
   const { data: publishedTrips } = usePublishedTrips();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [friendPickerOpen, setFriendPickerOpen] = useState(false);
+  const [invitingFriendId, setInvitingFriendId] = useState<string | null>(null);
+  const [invitedFriendIds, setInvitedFriendIds] = useState<Set<string>>(new Set());
   const isOwner = plan.user_id === session?.user.id;
   const title = plan.title ?? plan.request.region;
   const isPublished = (publishedTrips ?? []).some((t) => t.id === plan.id);
+
+  const inviteFriend = async (friend: Friend) => {
+    setInvitingFriendId(friend.friend_id);
+    try {
+      await inviteFriendToTrip.mutateAsync({ tripId: plan.id, friendId: friend.friend_id });
+      setInvitedFriendIds((prev) => new Set(prev).add(friend.friend_id));
+    } catch (e) {
+      Alert.alert("Couldn't invite", friendErrorMessage((e as Error).message));
+    } finally {
+      setInvitingFriendId(null);
+    }
+  };
 
   const publish = async () => {
     const ok = await ensureCommunityTermsAccepted();
@@ -734,6 +777,9 @@ function TripCard({ plan }: { plan: TripPlan }) {
       "Invite friends to this trip",
       `Code: ${plan.invite_code}\n\nAnyone with the code can view and edit this trip.`,
       [
+        // The code share stays exactly as it was, for people who aren't
+        // friends yet. Picking a friend is an additional door next to it.
+        ...(isOwner ? [{ text: "Invite a friend", onPress: () => setFriendPickerOpen(true) }] : []),
         {
           text: "Share code",
           onPress: () =>
@@ -741,7 +787,7 @@ function TripCard({ plan }: { plan: TripPlan }) {
               message: `Help me plan "${title}" in ${skin.vocab.appName}: open the app, go to Trips → Join a trip, and enter code ${plan.invite_code}.`,
             }).catch(() => {}),
         },
-        { text: "Done", style: "cancel" },
+        { text: "Done", style: "cancel" as const },
       ],
     );
   };
@@ -809,6 +855,16 @@ function TripCard({ plan }: { plan: TripPlan }) {
         </>
       )}
       {open && editing && <TripEditor plan={plan} onDone={() => setEditing(false)} />}
+      {isOwner && (
+        <FriendPickerSheet
+          visible={friendPickerOpen}
+          onClose={() => setFriendPickerOpen(false)}
+          onPick={inviteFriend}
+          busyId={invitingFriendId}
+          doneIds={invitedFriendIds}
+          title="Invite a friend to this trip"
+        />
+      )}
     </View>
   );
 }

@@ -32,10 +32,22 @@ export function ShareCard({
   logs,
   handle,
   badge,
+  showWantTo = true,
 }: {
   logs: MyLog[];
   handle: string | null;
   badge?: string | null;
+  /**
+   * Whether to render the "want to [visit]" stat. Defaults to true so the
+   * caller's own card (built from their own logs, which do carry a real
+   * `want` status) is unchanged. The friend-profile screen passes false: it
+   * adapts `friend_places()` rows — which the backend never returns a
+   * status/rating/note for, by design — into `status: "visited"` entries, so
+   * this stat would always compute to 0 rather than an honest "we don't
+   * know". `topRated` already self-hides when empty, so only this stat needs
+   * the explicit gate.
+   */
+  showWantTo?: boolean;
 }) {
   const visited = logs.filter((l) => l.status === "visited");
   const visitedSlugs = useMemo(() => new Set(visited.map((l) => l.place.slug)), [logs]);
@@ -91,10 +103,12 @@ export function ShareCard({
       <View style={styles.statsRow}>
         <Stat value={visited.length} label={skin.vocab.visited.toLowerCase()} />
         <Stat value={states.size} label={states.size === 1 ? "state" : "states"} />
-        <Stat
-          value={logs.filter((l) => l.status === "want").length}
-          label={skin.vocab.wantTo.toLowerCase()}
-        />
+        {showWantTo ? (
+          <Stat
+            value={logs.filter((l) => l.status === "want").length}
+            label={skin.vocab.wantTo.toLowerCase()}
+          />
+        ) : null}
       </View>
 
       {topRated.length > 0 && (

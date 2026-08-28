@@ -6,8 +6,10 @@ import * as Notifications from "expo-notifications";
  * Two reminders map to what someone actually does before a visit:
  *  - "evening": fixed at 19:00 local the day before — pack up, check the
  *    weather, plan the drive.
- *  - "leave": 2 hours before the visit — roughly travel time plus enough
- *    buffer to check in and warm up.
+ *  - "leave": the user's own travel time plus a fixed check-in/warm-up
+ *    buffer before the visit. Falls back to a flat 2 hours when no travel
+ *    time has been set on the visit, so reminders don't regress for anyone
+ *    who hasn't set one.
  *
  * Neither may ever fire between 21:00 and 06:30 local (nobody wants an alarm
  * at 3am for an early-morning slot), and a "leave" reminder that would land
@@ -47,8 +49,21 @@ const ALL_KNOWN_TAGS = [...CURRENT_TAGS, ...LEGACY_TAGS];
 const NIGHT_END_HOUR = 6;
 const NIGHT_END_MINUTE = 30;
 const NIGHT_START_HOUR = 21;
-const LEAVE_LEAD_MS = 2 * 3600_000;
+/** Fallback lead time when a visit has no travel time set — unchanged from before travel-aware reminders existed. */
+const DEFAULT_LEAVE_LEAD_MS = 2 * 3600_000;
+/** Check-in / warm-up buffer added on top of travel time for the "leave" reminder. */
+const CHECKIN_BUFFER_MIN = 30;
 const MIN_LEAD_BEFORE_VISIT_MS = 15 * 60_000;
+/**
+ * Tolerance used when comparing a freshly-recomputed fire time against the
+ * fire time stashed in an already-scheduled notification's own payload (see
+ * `data.fireAt` in `scheduleVisitReminders`). The two should match exactly
+ * since we round-trip a raw millisecond timestamp through our own payload
+ * rather than through any OS-native trigger representation, but a small
+ * tolerance is kept as cheap insurance against float/serialization edge
+ * cases so it never forces a needless reschedule on every reconcile.
+ */
+const SAME_FIRE_TIME_TOLERANCE_MS = 60_000;
 
 /** Builds a Date from local date components — safe across a DST boundary. */
 function localDate(year: number, month: number, day: number, hour: number, minute: number): Date {
@@ -86,16 +101,45 @@ function pullOutOfNightWindow(candidate: Date): Date {
   return candidate;
 }
 
+export interface LeaveReminder {
+  fireAt: Date;
+  /**
+   * True when the 21:00–06:30 night-window clamp ate far enough into the
+   * travel lead that this fire time no longer leaves time to arrive before
+   * `at` — still worth firing (a late nudge beats silence) but dishonest to
+   * word as "time to leave".
+   */
+  late: boolean;
+}
+
 /**
  * "Time to leave" fire time, or null when this reminder should be skipped
  * entirely: either the clamped time lands within 15 minutes of (or after)
  * the visit itself, e.g. a 6:30 alert for a 6:00 start.
+ *
+ * Lead time is the user's own travel time plus the check-in buffer; when no
+ * travel time has been set (`travelMinutes` is null) this falls back to the
+ * flat default so existing reminders don't change.
  */
-function leaveTime(at: Date): Date | null {
-  const raw = new Date(at.getTime() - LEAVE_LEAD_MS);
+function leaveTime(at: Date, travelMinutes: number | null): LeaveReminder | null {
+  const leadMs =
+    travelMinutes != null ? (travelMinutes + CHECKIN_BUFFER_MIN) * 60_000 : DEFAULT_LEAVE_LEAD_MS;
+  const raw = new Date(at.getTime() - leadMs);
   const clamped = pullOutOfNightWindow(raw);
-  if (at.getTime() - clamped.getTime() <= MIN_LEAD_BEFORE_VISIT_MS) return null;
-  return clamped;
+  const actualLeadMs = at.getTime() - clamped.getTime();
+  if (actualLeadMs <= MIN_LEAD_BEFORE_VISIT_MS) return null;
+  const late = travelMinutes != null && actualLeadMs < travelMinutes * 60_000;
+  return { fireAt: clamped, late };
+}
+
+/**
+ * Read-only preview of the "leave" reminder for a visit, for UI display —
+ * e.g. a caption showing the computed fire time, or that none will fire at
+ * all. Applies the exact same rules `planReminders` uses to actually
+ * schedule it.
+ */
+export function previewLeaveReminder(at: Date, travelMinutes: number | null): LeaveReminder | null {
+  return leaveTime(at, travelMinutes);
 }
 
 interface ReminderPlan {
@@ -111,7 +155,12 @@ interface ReminderPlan {
  * scheduling rules can be reasoned about — and unit-tested — independent of
  * the notifications API.
  */
-function planReminders(placeName: string, at: Date, now: number): ReminderPlan[] {
+function planReminders(
+  placeName: string,
+  at: Date,
+  now: number,
+  travelMinutes: number | null,
+): ReminderPlan[] {
   const timeText = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const plans: ReminderPlan[] = [];
 
@@ -127,34 +176,63 @@ function planReminders(placeName: string, at: Date, now: number): ReminderPlan[]
     });
   }
 
-  const leave = leaveTime(at);
-  if (leave && leave.getTime() > now) {
+  const leave = leaveTime(at, travelMinutes);
+  if (leave && leave.fireAt.getTime() > now) {
     plans.push({
       tag: "leave",
-      fireAt: leave,
+      fireAt: leave.fireAt,
       title: `${placeName} at ${timeText}`,
-      body: "Time to head out.",
+      body:
+        // A clamped-and-late reminder must not claim there's still time to
+        // leave — it fires after the window where that would be true.
+        leave.late && travelMinutes != null
+          ? `Running late — ${placeName} is about ${travelMinutes} minutes away.`
+          : travelMinutes != null && travelMinutes > 0
+            ? `Time to head out — about ${travelMinutes} minutes away.`
+            : "Time to head out.",
     });
   }
 
   return plans;
 }
 
-/** Returns false if the user declined notification permission. */
+/**
+ * Returns false if the user declined notification permission.
+ *
+ * Scheduling only ever adds or replaces a tag `planReminders` still wants;
+ * a tag it no longer wants (e.g. "leave" dropped because the night-window
+ * clamp ate the whole lead, or a travel-time edit pushes the fire time past
+ * the visit) needs an explicit cancel here too, since nothing else calls
+ * this function ever removes anything on its own — see reconcileReminders'
+ * own per-tag cancel, which this mirrors for callers (like TravelMinutes)
+ * that invoke this directly instead of going through reconcile.
+ */
 export async function scheduleVisitReminders(
   visitId: string,
   placeName: string,
   at: Date,
+  travelMinutes: number | null = null,
 ): Promise<boolean> {
   const { status } = await Notifications.requestPermissionsAsync();
   if (status !== "granted") return false;
-  for (const plan of planReminders(placeName, at, Date.now())) {
+  const plans = planReminders(placeName, at, Date.now(), travelMinutes);
+  const plannedTags = new Set(plans.map((p) => p.tag));
+  for (const tag of CURRENT_TAGS) {
+    if (plannedTags.has(tag)) continue;
+    await Notifications.cancelScheduledNotificationAsync(`visit-${visitId}-${tag}`).catch(() => {});
+  }
+  for (const plan of plans) {
     await Notifications.scheduleNotificationAsync({
       identifier: `visit-${visitId}-${plan.tag}`,
       content: {
         title: plan.title,
         body: plan.body,
         sound: true,
+        // Stashed so a later reconcile can tell whether the fire time it
+        // would compute today still matches what's actually scheduled,
+        // without depending on how the OS represents the trigger — see
+        // `existingFireAt` and SAME_FIRE_TIME_TOLERANCE_MS.
+        data: { fireAt: plan.fireAt.getTime() },
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,
@@ -176,10 +254,65 @@ const VISIT_REMINDER_ID = /^visit-(.+)-(evening|leave|24h|4h)$/;
 const LEGACY_TAG_SET: ReadonlySet<string> = new Set(LEGACY_TAGS);
 
 /**
+ * Extracts the fire time a scheduled notification was *intended* to fire at,
+ * from the `data.fireAt` payload `scheduleVisitReminders` stashes on every
+ * notification it creates (a raw milliseconds-since-epoch number).
+ *
+ * This deliberately does NOT read the OS-native `trigger` shape. expo-
+ * notifications converts a DATE trigger into a platform-specific
+ * representation — on iOS 57 a DATE trigger comes back from
+ * `getAllScheduledNotificationsAsync()` as a `UNTimeIntervalNotification-
+ * Trigger` (`{ type: "timeInterval", seconds: <n>, repeats: false }`), where
+ * `seconds` is the *configured* interval rather than time-remaining, so the
+ * absolute fire time is not recoverable from the trigger payload at all. A
+ * notification scheduled before this payload existed (i.e. before this app
+ * version) has no `data.fireAt` and returns null here, which the caller
+ * treats as "can't confirm it matches" and reschedules — safe, since
+ * identifiers are stable and `scheduleNotificationAsync` replaces in place,
+ * so the worst case is one redundant write, never a missed one.
+ */
+function existingFireAt(existing: Notifications.NotificationRequest): Date | null {
+  const raw = existing.content?.data?.fireAt;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  return new Date(raw);
+}
+
+/** Within a minute counts as "the same" fire time — see SAME_FIRE_TIME_TOLERANCE_MS. */
+function sameFireTime(a: Date, b: Date): boolean {
+  return Math.abs(a.getTime() - b.getTime()) < SAME_FIRE_TIME_TOLERANCE_MS;
+}
+
+/**
+ * Cancels anything still scheduled under a legacy 24h/4h identifier (see
+ * LEGACY_TAGS), independent of any visit data — it only reads the on-device
+ * notification queue. This is the ONLY thing that ever cancels those old
+ * alarms (including the 3am one), so it must run unconditionally on every
+ * app start rather than as a side effect of a successful visit-times fetch:
+ * gating it on server data means an unreachable view (migration not yet
+ * applied, offline first launch, expired session) leaves testers' devices
+ * with the legacy alarms queued forever.
+ */
+export async function cancelLegacyReminders(): Promise<void> {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  for (const n of scheduled) {
+    const m = VISIT_REMINDER_ID.exec(n.identifier);
+    if (!m) continue;
+    const tag = m[2];
+    if (LEGACY_TAG_SET.has(tag!)) {
+      await Notifications.cancelScheduledNotificationAsync(n.identifier).catch(() => {});
+    }
+  }
+}
+
+/**
  * Reconciles on-device reminders against the current visit list: cancels
- * reminders for visits that no longer exist, and re-schedules any missing
- * for visits that do (e.g. after a fresh install restored the cache but not
- * the OS notification queue). Never re-prompts for permission.
+ * reminders for visits that no longer exist, and re-schedules any that are
+ * missing OR whose actually-scheduled fire time no longer matches what
+ * `planReminders` computes today (e.g. travel time changed, or the visit's
+ * time moved) — comparing by trigger date rather than by identifier
+ * presence, since both tags are scheduled up front and stay "present"
+ * forever even after their fire time has gone stale. Never re-prompts for
+ * permission.
  *
  * Also unconditionally cancels anything still scheduled under a legacy tag,
  * regardless of whether the visit still exists — those old 24h/4h alerts
@@ -187,11 +320,11 @@ const LEGACY_TAG_SET: ReadonlySet<string> = new Set(LEGACY_TAGS);
  * not be left to fire just because their visit is still upcoming.
  */
 export async function reconcileReminders(
-  visits: Array<{ id: string; at: string; place: { name: string } }>,
+  visits: Array<{ id: string; at: string; place_name: string; travel_minutes: number | null }>,
 ): Promise<void> {
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   const validIds = new Set(visits.map((v) => v.id));
-  const present = new Set<string>();
+  const byIdentifier = new Map<string, Notifications.NotificationRequest>();
   for (const n of scheduled) {
     const m = VISIT_REMINDER_ID.exec(n.identifier);
     if (!m) continue;
@@ -201,7 +334,7 @@ export async function reconcileReminders(
       continue;
     }
     if (validIds.has(visitId!)) {
-      present.add(n.identifier);
+      byIdentifier.set(n.identifier, n);
     } else {
       await Notifications.cancelScheduledNotificationAsync(n.identifier).catch(() => {});
     }
@@ -213,7 +346,27 @@ export async function reconcileReminders(
   for (const v of visits) {
     const at = new Date(v.at);
     if (at.getTime() <= Date.now()) continue;
-    const missing = CURRENT_TAGS.some((tag) => !present.has(`visit-${v.id}-${tag}`));
-    if (missing) await scheduleVisitReminders(v.id, v.place.name, at);
+    const plans = planReminders(v.place_name, at, Date.now(), v.travel_minutes);
+    const plannedTags = new Set(plans.map((p) => p.tag));
+
+    // A tag that used to be scheduled but today's plan no longer wants (e.g.
+    // the "leave" reminder now gets dropped because the night-window clamp
+    // ate the whole lead) needs an explicit cancel — scheduling only ever
+    // adds or replaces, it never removes.
+    for (const tag of CURRENT_TAGS) {
+      if (plannedTags.has(tag)) continue;
+      const identifier = `visit-${v.id}-${tag}`;
+      if (byIdentifier.has(identifier)) {
+        await Notifications.cancelScheduledNotificationAsync(identifier).catch(() => {});
+      }
+    }
+
+    const needsReschedule = plans.some((plan) => {
+      const existing = byIdentifier.get(`visit-${v.id}-${plan.tag}`);
+      if (!existing) return true;
+      const fireAt = existingFireAt(existing);
+      return !fireAt || !sameFireTime(fireAt, plan.fireAt);
+    });
+    if (needsReschedule) await scheduleVisitReminders(v.id, v.place_name, at, v.travel_minutes);
   }
 }

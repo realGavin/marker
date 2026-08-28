@@ -14,11 +14,22 @@ import { QueryProvider } from "../providers/query";
 import { isBackendConfigured } from "../lib/env";
 import { colors } from "../ui/theme";
 import { ActivityIndicator, View } from "react-native";
+import { cancelLegacyReminders } from "../lib/reminders";
 
 function Gate() {
   const { session, loading } = useAuth();
   const signedIn = isBackendConfigured && !!session;
   const { data: profile, isPending: profilePending } = useProfile();
+
+  // Unconditional: needs no server data, only the on-device notification
+  // queue, so it must not be gated on auth or a successful fetch — see
+  // cancelLegacyReminders' own doc comment for why that matters. Lives here
+  // (mounted once at app start) rather than in the Trips tab, because Expo
+  // Router tabs are lazy: a tester who never opens Trips would otherwise
+  // keep the legacy 24h/4h alarms (including the 3am one) queued forever.
+  React.useEffect(() => {
+    cancelLegacyReminders().catch(() => {});
+  }, []);
 
   if (loading || (signedIn && profilePending)) {
     return (
@@ -47,6 +58,14 @@ function Gate() {
         />
         <Stack.Screen
           name="blocked"
+          options={{ headerShown: true, headerStyle: { backgroundColor: colors.background }, headerTintColor: colors.primary, title: "" }}
+        />
+        <Stack.Screen
+          name="friends"
+          options={{ headerShown: true, headerStyle: { backgroundColor: colors.background }, headerTintColor: colors.primary, title: "" }}
+        />
+        <Stack.Screen
+          name="friend/[id]"
           options={{ headerShown: true, headerStyle: { backgroundColor: colors.background }, headerTintColor: colors.primary, title: "" }}
         />
         <Stack.Screen name="paywall" options={{ presentation: "modal" }} />

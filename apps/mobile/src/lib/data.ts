@@ -436,11 +436,66 @@ export function useAddToList() {
   });
 }
 
-/** A scheduled upcoming visit; the skin names these (see vocab.visitTime). */
+/**
+ * A scheduled upcoming visit; the skin names these (see vocab.visitTime).
+ * Sourced from the `my_visit_times` view, which is scoped to visits the
+ * caller owns or has joined. `invite_code` is only populated for the owner
+ * (non-owners can't invite further); `travel_minutes` is always the
+ * caller's own, never another member's; `member_count` includes the owner
+ * so it's always >= 1.
+ */
 export interface VisitTime {
   id: string;
+  place_id: string;
+  place_name: string;
+  place_slug: string;
   at: string;
-  place: { id: string; name: string; slug: string };
+  is_owner: boolean;
+  invite_code: string | null;
+  travel_minutes: number | null;
+  member_count: number;
+}
+
+/** Error codes the visit-time RPCs (join/leave/set_travel_minutes) can throw. */
+export type VisitError =
+  | "not_signed_in"
+  | "not_found"
+  | "not_owner"
+  | "already_member"
+  | "invalid_minutes"
+  | "too_many_attempts"
+  | "owner_cannot_leave"
+  | "failed";
+
+/**
+ * Maps a visit-time RPC's thrown error code to a message worth showing.
+ * `context` disambiguates `not_found`: only the join path takes an
+ * invite code, so only it should tell the user to check one. `set_travel_minutes`
+ * and `leave_visit` raise the same code to mean "this visit was deleted out
+ * from under you" — telling that user to check a code they never typed is
+ * actively confusing.
+ */
+export function visitErrorMessage(code: string, context: "join" | "generic" = "generic"): string {
+  switch (code as VisitError) {
+    case "not_signed_in":
+      return "Sign in to do that.";
+    case "not_found":
+      return context === "join" ? "Check the code and try again." : "This one's gone.";
+    case "already_member":
+      return "You're already on this one.";
+    case "invalid_minutes":
+      return "Enter a travel time between 0 and 480 minutes.";
+    case "too_many_attempts":
+      return "Too many attempts — try again in a bit.";
+    case "owner_cannot_leave":
+      // The owner can't leave their own visit — they delete it instead, same
+      // as before this feature existed.
+      return "You created this one — delete it instead of leaving.";
+    case "not_owner":
+      return "Only the owner can do that.";
+    default:
+      return "Something went wrong. Please try again.";
+  }
 }
 
 export function useVisitTimes() {
@@ -450,11 +505,16 @@ export function useVisitTimes() {
     enabled: !!session,
     queryFn: async (): Promise<VisitTime[]> => {
       const { data, error } = await sb()
-        .from("visit_times")
-        .select("id, at, place:places(id, name, slug)")
-        .order("at", { ascending: true });
+        .from("my_visit_times")
+        .select(
+          "id, place_id, place_name, place_slug, at, is_owner, invite_code, travel_minutes, member_count",
+        );
       if (error) throw error;
-      return (data as unknown as VisitTime[]) ?? [];
+      // The view carries no ORDER BY, so sort client-side — same ascending
+      // order every consumer already relies on.
+      return ((data as unknown as VisitTime[]) ?? []).sort(
+        (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime(),
+      );
     },
   });
 }
@@ -482,6 +542,46 @@ export function useDeleteVisitTime() {
   return useMutation({
     mutationFn: async (id: string) => {
       const { error } = await sb().from("visit_times").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visit-times"] }),
+  });
+}
+
+/** Sets (or, with `minutes: null`, clears) the caller's own travel time on a visit. */
+export function useSetTravelMinutes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { visitId: string; minutes: number | null }) => {
+      const { error } = await sb().rpc("set_travel_minutes", {
+        visit: input.visitId,
+        minutes: input.minutes,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visit-times"] }),
+  });
+}
+
+/** Joins someone else's visit by its invite code; returns the visit id. */
+export function useJoinVisitTime() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (code: string) => {
+      const { data, error } = await sb().rpc("join_visit", { code });
+      if (error) throw error;
+      return data as string;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visit-times"] }),
+  });
+}
+
+/** Leaves a visit the caller joined (not owns — the owner deletes instead; see owner_cannot_leave). */
+export function useLeaveVisitTime() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (visitId: string) => {
+      const { error } = await sb().rpc("leave_visit", { visit: visitId });
       if (error) throw error;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["visit-times"] }),
@@ -864,7 +964,11 @@ export function useAdoptTrip() {
 
 export function useReportContent() {
   return useMutation({
-    mutationFn: async (input: { targetType: "trip" | "condition_report"; targetId: string; reason: string }) => {
+    mutationFn: async (input: {
+      targetType: "trip" | "condition_report" | "profile";
+      targetId: string;
+      reason: string;
+    }) => {
       const { error } = await sb().rpc("report_content", {
         target_type: input.targetType,
         target_id: input.targetId,
@@ -873,6 +977,26 @@ export function useReportContent() {
       if (error) throw error;
     },
   });
+}
+
+/**
+ * Maps report_content's thrown error code to a message worth showing.
+ * `own_profile` (reporting yourself) should never actually surface — the UI
+ * must never draw a Report control on the caller's own profile in the first
+ * place — but it's mapped defensively here rather than left to fall through
+ * to the generic string below.
+ */
+export function reportErrorMessage(code: string): string {
+  switch (code) {
+    case "own_profile":
+      return "You can't report your own profile.";
+    case "too_many_reports":
+      return "Too many reports — try again later.";
+    case "not_found":
+      return "That's gone already.";
+    default:
+      return "Couldn't report. Please try again.";
+  }
 }
 
 export function useBlockUser() {
@@ -938,5 +1062,287 @@ export function useMyRank() {
       const row = Array.isArray(data) ? data[0] : data;
       return (row as { visited_count: number; top_percent: number }) ?? null;
     },
+  });
+}
+
+// ==================================================================== FRIENDS
+//
+// The backend deliberately exposes no "requests I've sent" surface (see
+// my_friend_requests in the migration): a pending request and a declined one
+// must read identically to the sender, forever. Nothing here builds a client
+// side cache of sent requests either — don't add one.
+
+/** An accepted friend, as listed by my_friends(). */
+export interface Friend {
+  friend_id: string;
+  handle: string | null;
+  display_name: string | null;
+  home_region: string | null;
+  since: string;
+}
+
+/** An incoming (not outgoing — there is no such list) friend request. */
+export interface FriendRequest {
+  requester_id: string;
+  handle: string | null;
+  display_name: string | null;
+  requested_at: string;
+}
+
+/** The header of a friend's profile card — exactly what an accepted friend may see. */
+export interface FriendProfile {
+  id: string;
+  handle: string | null;
+  display_name: string | null;
+  home_region: string | null;
+  visited_count: number;
+  top_percent: number;
+}
+
+/** One place a friend has visited — place identity only, for a dot-field map. */
+export interface FriendPlace {
+  place_id: string;
+  slug: string;
+  name: string;
+  city: string | null;
+  region: string | null;
+}
+
+/** A handle lookup hit from find_user_by_handle — deliberately thin (see the RPC doc). */
+export interface HandleMatch {
+  id: string;
+  handle: string;
+  display_name: string | null;
+}
+
+/** Error codes the friend RPCs can raise, verbatim as `error.message`. */
+export type FriendError =
+  | "not_signed_in"
+  | "not_found"
+  | "already_friends"
+  | "cannot_friend_self"
+  | "blocked"
+  | "too_many_requests"
+  | "not_owner"
+  | "content_suspended";
+
+/**
+ * Maps a friend RPC's thrown error code to a message worth showing.
+ * `context: "handle"` is for the add-by-handle flow, where `not_found` covers
+ * BOTH "no such handle" and "they blocked you" — the two must never be worded
+ * differently, or the second one becomes a way to probe for a block. `blocked`
+ * only ever means the CALLER blocked the other person (request_friend's own
+ * blocked branch), so that one names the Blocked accounts screen.
+ */
+export function friendErrorMessage(code: string, context: "handle" | "generic" = "generic"): string {
+  switch (code as FriendError) {
+    case "not_signed_in":
+      return "Sign in to do that.";
+    case "not_found":
+      return context === "handle" ? "No account with that handle." : "That friend isn't available anymore.";
+    case "already_friends":
+      return "You're already friends.";
+    case "cannot_friend_self":
+      return "That's your own handle.";
+    case "blocked":
+      return "You've blocked this account — unblock them from Blocked accounts to add them.";
+    case "too_many_requests":
+      return "Too many requests — try again later.";
+    case "not_owner":
+      return "Only the owner can do that.";
+    case "content_suspended":
+      return "Your account can't do that right now.";
+    default:
+      return "Something went wrong. Please try again.";
+  }
+}
+
+/** The caller's accepted friends. */
+export function useFriends() {
+  const { session } = useAuth();
+  return useQuery({
+    queryKey: ["friends", session?.user.id],
+    enabled: !!session,
+    queryFn: async (): Promise<Friend[]> => {
+      try {
+        const { data, error } = await sb().rpc("my_friends");
+        if (error) throw error;
+        return (data ?? []) as Friend[];
+      } catch {
+        return []; // hide rather than error (also covers not-yet-deployed RPC)
+      }
+    },
+  });
+}
+
+/** Incoming friend requests only — there is no outbound list, by design. */
+export function useFriendRequests() {
+  const { session } = useAuth();
+  return useQuery({
+    queryKey: ["friend-requests", session?.user.id],
+    enabled: !!session,
+    queryFn: async (): Promise<FriendRequest[]> => {
+      try {
+        const { data, error } = await sb().rpc("my_friend_requests");
+        if (error) throw error;
+        return (data ?? []) as FriendRequest[];
+      } catch {
+        return [];
+      }
+    },
+  });
+}
+
+/** A friend's profile header; null if they're gone, blocked, or not actually a friend. */
+export function useFriendProfile(friendId: string | undefined) {
+  return useQuery({
+    queryKey: ["friend-profile", friendId],
+    enabled: !!friendId,
+    retry: false,
+    queryFn: async (): Promise<FriendProfile | null> => {
+      try {
+        const { data, error } = await sb().rpc("friend_profile", { friend: friendId });
+        if (error) throw error;
+        const row = Array.isArray(data) ? data[0] : data;
+        return (row as FriendProfile) ?? null;
+      } catch {
+        return null;
+      }
+    },
+  });
+}
+
+/** The places a friend has visited — place identity only, for the map. */
+export function useFriendPlaces(friendId: string | undefined) {
+  return useQuery({
+    queryKey: ["friend-places", friendId],
+    enabled: !!friendId,
+    queryFn: async (): Promise<FriendPlace[]> => {
+      try {
+        const { data, error } = await sb().rpc("friend_places", { friend: friendId });
+        if (error) throw error;
+        return (data ?? []) as FriendPlace[];
+      } catch {
+        return [];
+      }
+    },
+  });
+}
+
+/**
+ * Looks up an exact handle (case-insensitive, server-side). A mutation rather
+ * than a query: it's an on-demand action tied to a rate-limited ledger, not
+ * something to cache or refetch. Returns null on a miss (no such handle, or
+ * they blocked the caller — indistinguishable on purpose); throws the typed
+ * FriendError codes (e.g. too_many_requests) on a real failure.
+ */
+export function useFindFriendByHandle() {
+  return useMutation({
+    mutationFn: async (handle: string): Promise<HandleMatch | null> => {
+      const { data, error } = await sb().rpc("find_user_by_handle", { target_handle: handle.trim() });
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+      return (row as HandleMatch) ?? null;
+    },
+  });
+}
+
+/**
+ * Sends a friend request; returns 'accepted' when the target had already
+ * asked the caller, or 'not_found' for an unknown handle (or a handle that
+ * blocked the caller — indistinguishable on purpose, see `friendErrorMessage`'s
+ * "handle" context).
+ *
+ * `request_friend` used to RAISE `not_found` instead of returning it — raising
+ * rolled back the rate-limit ledger insert, making unknown-handle probing free
+ * and unmetered. The RPC's return type is unchanged (still `text`), so this
+ * mutation still throws for every other error code; only `not_found` moved
+ * from thrown to returned. Callers must handle both: the caller-side check
+ * below covers a returned 'not_found' from the new function, and
+ * `friendErrorMessage`'s existing 'not_found' case (used in the `onError`
+ * path) keeps working against an old, not-yet-redeployed function that still
+ * raises it.
+ */
+export function useRequestFriend() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (handle: string): Promise<"pending" | "accepted" | "not_found"> => {
+      const { data, error } = await sb().rpc("request_friend", { handle: handle.trim() });
+      if (error) throw error;
+      return data as "pending" | "accepted" | "not_found";
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["friends"] });
+      qc.invalidateQueries({ queryKey: ["friend-requests"] });
+    },
+  });
+}
+
+/** Accepts an incoming request; `other` is the requester's id. */
+export function useAcceptFriend() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (other: string) => {
+      const { error } = await sb().rpc("accept_friend", { other });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["friends"] });
+      qc.invalidateQueries({ queryKey: ["friend-requests"] });
+    },
+  });
+}
+
+/** Declines an incoming request; `other` is the requester's id. */
+export function useDeclineFriend() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (other: string) => {
+      const { error } = await sb().rpc("decline_friend", { other });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["friends"] });
+      qc.invalidateQueries({ queryKey: ["friend-requests"] });
+    },
+  });
+}
+
+/** Ends a friendship; idempotent, never errors on the backend. */
+export function useRemoveFriend() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (other: string) => {
+      const { error } = await sb().rpc("remove_friend", { other });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["friends"] });
+      qc.invalidateQueries({ queryKey: ["friend-requests"] });
+    },
+  });
+}
+
+/** Owner-only; adds a friend to a trip exactly as a code-join would. Idempotent. */
+export function useInviteFriendToTrip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { tripId: string; friendId: string }) => {
+      const { error } = await sb().rpc("invite_friend_to_trip", { trip: input.tripId, friend: input.friendId });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["trips"] }),
+  });
+}
+
+/** Owner-only; adds a friend to a visit time exactly as a code-join would. Idempotent. */
+export function useInviteFriendToVisit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { visitId: string; friendId: string }) => {
+      const { error } = await sb().rpc("invite_friend_to_visit", { visit: input.visitId, friend: input.friendId });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visit-times"] }),
   });
 }

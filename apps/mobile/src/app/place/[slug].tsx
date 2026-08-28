@@ -38,8 +38,10 @@ import { useRouter } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { PlacePhoto } from "../../ui/PlacePhoto";
 import { PostVisitSheet, StarRating } from "../../ui/PostVisitSheet";
-import { scheduleVisitReminders, cancelVisitReminders } from "../../lib/reminders";
-import { useVisitTimes, useAddVisitTime, useDeleteVisitTime } from "../../lib/data";
+import { DraftTravelMinutesRow } from "../../ui/TravelMinutes";
+import { VisitTimeRow } from "../../ui/VisitTimeRow";
+import { scheduleVisitReminders } from "../../lib/reminders";
+import { useVisitTimes, useAddVisitTime, useSetTravelMinutes } from "../../lib/data";
 import { pins } from "../../lib/pins";
 
 /** Rating stored as 0–20 (half steps); shown as 0–10. */
@@ -82,13 +84,20 @@ export default function PlaceScreen() {
   const myLists = (allLists ?? []).filter((l) => l.owner_id !== null);
   const { data: visitTimes } = useVisitTimes();
   const addVisitTime = useAddVisitTime();
-  const deleteVisitTime = useDeleteVisitTime();
+  const setTravelMinutes = useSetTravelMinutes();
   const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [draftTime, setDraftTime] = useState<Date>(() => {
     const d = new Date(Date.now() + 24 * 3600_000);
     d.setMinutes(0, 0, 0);
     return d;
   });
+  // No prefill: with no routing data source, a "distance from current
+  // location" guess reads current location (not home), can prefill 0 when
+  // the visit is created standing at the place itself, and — once the visit
+  // saves — an estimated number and a typed one render identically, including
+  // in the reminder text. A blank field the user fills in once is the
+  // honest version of this feature.
+  const [draftTravelMinutes, setDraftTravelMinutes] = useState<number | null>(null);
 
   const myLog = logs?.find((l) => l.place.slug === slug);
   const [note, setNote] = useState("");
@@ -147,15 +156,23 @@ export default function PlaceScreen() {
     .filter((link): link is typeof link & { href: string } => link.href !== null);
   const status = myLog?.status;
   const myVisitTimes = (visitTimes ?? []).filter(
-    (v) => v.place.id === place.id && new Date(v.at).getTime() > Date.now(),
+    (v) => v.place_id === place.id && new Date(v.at).getTime() > Date.now(),
   );
 
   const confirmVisitTime = async () => {
     try {
       const id = await addVisitTime.mutateAsync({ placeId: place.id, at: draftTime });
+      if (draftTravelMinutes != null) {
+        // Best-effort: reminders below use the value directly regardless of
+        // whether this write lands, so a failure here doesn't cost the
+        // reminder itself — only the saved value for other devices/sessions.
+        await setTravelMinutes.mutateAsync({ visitId: id, minutes: draftTravelMinutes }).catch(() => {});
+      }
       setTimePickerOpen(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      const granted = await scheduleVisitReminders(id, place.name, draftTime);
+      const granted = await scheduleVisitReminders(id, place.name, draftTime, draftTravelMinutes);
+      // Reset the draft so the next visit created on this screen starts fresh.
+      setDraftTravelMinutes(null);
       if (!granted) {
         Alert.alert(
           "Reminders off",
@@ -303,6 +320,7 @@ export default function PlaceScreen() {
               minuteInterval={10}
               onChange={(_e, d) => d && setDraftTime(d)}
             />
+            <DraftTravelMinutesRow minutes={draftTravelMinutes} onChange={setDraftTravelMinutes} />
             <Pressable
               style={[styles.button, addVisitTime.isPending && { opacity: 0.6 }]}
               disabled={addVisitTime.isPending}
@@ -318,27 +336,7 @@ export default function PlaceScreen() {
           <View style={styles.card}>
             <Text style={type.heading}>{skin.vocab.visitTimes}</Text>
             {myVisitTimes.map((v) => (
-              <View key={v.id} style={styles.factRow}>
-                <Ionicons name="alarm" size={16} color={colors.accent} />
-                <Text style={[type.body, { flex: 1, marginLeft: spacing.sm }]}>
-                  {new Date(v.at).toLocaleString([], {
-                    weekday: "short",
-                    month: "short",
-                    day: "numeric",
-                    hour: "numeric",
-                    minute: "2-digit",
-                  })}
-                </Text>
-                <Pressable
-                  hitSlop={8}
-                  onPress={() => {
-                    deleteVisitTime.mutate(v.id);
-                    cancelVisitReminders(v.id).catch(() => {});
-                  }}
-                >
-                  <Ionicons name="close-circle-outline" size={19} color={colors.textSecondary} />
-                </Pressable>
-              </View>
+              <VisitTimeRow key={v.id} visit={v} />
             ))}
           </View>
         )}

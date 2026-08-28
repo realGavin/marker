@@ -7,7 +7,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
 import { useAuth } from "../../providers/auth";
 import { usePurchases } from "../../providers/purchases";
-import { useMyBlocks, useMyLogs, useMyRank, useProfile } from "../../lib/data";
+import { useFriendRequests, useFriends, useMyBlocks, useMyLogs, useMyRank, useProfile } from "../../lib/data";
 import { ShareCard } from "../../ui/ShareCard";
 import { skin } from "../../skin";
 import { colors, spacing, type } from "../../ui/theme";
@@ -24,6 +24,8 @@ export default function ProfileScreen() {
   const handle = profile?.handle ?? session?.user.email?.split("@")[0] ?? null;
   const { data: rank } = useMyRank();
   const { data: blocks } = useMyBlocks();
+  const { data: friends } = useFriends();
+  const { data: friendRequests } = useFriendRequests();
   // only wear a badge once there's a collection behind it
   const badge = rank && rank.visited_count >= 3 ? `TOP ${rank.top_percent}%` : null;
 
@@ -99,6 +101,23 @@ export default function ProfileScreen() {
           </Pressable>
         )}
       </View>
+
+      {((friends && friends.length > 0) || (friendRequests && friendRequests.length > 0)) && (
+        <Pressable style={styles.blockedRow} onPress={() => router.push("/friends")}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+            <Text style={type.caption}>Friends</Text>
+            {friendRequests && friendRequests.length > 0 && (
+              <View style={styles.requestDot}>
+                <Text style={styles.requestDotText}>{friendRequests.length}</Text>
+              </View>
+            )}
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+            <Text style={[type.caption, { color: colors.textSecondary }]}>{friends?.length ?? 0}</Text>
+            <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
+          </View>
+        </Pressable>
+      )}
 
       {blocks && blocks.length > 0 && (
         <Pressable style={styles.blockedRow} onPress={() => router.push("/blocked")}>
@@ -231,4 +250,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   signOut: { alignItems: "center", marginTop: spacing.xl },
+  requestDot: {
+    backgroundColor: colors.accentFill,
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  requestDotText: { fontSize: 10, fontWeight: "800", color: "#1A1A18" },
 });
