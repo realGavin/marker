@@ -423,8 +423,16 @@ const KM_TRAVEL_CONTEXT_RE =
  * evidence of conversion. Only adjacency is: "plays 6.2 km", "6 km of golf",
  * "6 km long", "a 6-km course/layout".
  */
+// The `(?!\s+from ...centre)` lookahead is a correctness fix, not a loosening.
+// "N km FROM the centre" is the km_from_center value the prompt explicitly
+// permits, and a yardage converted to km is never phrased that way. Without it
+// the noun "play" collides with the verb `plays?`, so a perfectly grounded
+// "Coastal play 4 km from centre" was reported as a forbidden unit conversion.
+// The exemption stays limited to from-the-CENTRE wording rather than a bare
+// `from`, because "the course plays 6.2 km from tee to green" is a real
+// conversion and must keep failing.
 const KM_AS_LENGTH_RE =
-  /(?:\b(?:plays?|measures?|stretches?|spans?)\s+(?:about\s+|over\s+|nearly\s+)?\d+(?:\.\d+)?\s*km\b)|(?:\d+(?:\.\d+)?\s*[-\s]?km\s+(?:of\s+(?:golf|play(?:ing)?|holes?|turf|fairways?)|long\b|course\b|layout\b|track\b|round\b))/i;
+  /(?:\b(?:plays?|measures?|stretches?|spans?)\s+(?:about\s+|over\s+|nearly\s+)?\d+(?:\.\d+)?\s*km\b(?!\s+from\s+(?:the\s+)?(?:centre|center|city|downtown|hub|base)\b))|(?:\d+(?:\.\d+)?\s*[-\s]?km\s+(?:of\s+(?:golf|play(?:ing)?|holes?|turf|fairways?)|long\b|course\b|layout\b|track\b|round\b))/i;
 
 /**
  * Remove only the km figures that read as grounded travel distances, leaving
@@ -677,6 +685,20 @@ export function checkWalkableHonoured(itinerary, placeRows, input) {
  * plan never drifts outside the set the server retrieved for the first turn".
  * `opts.turnLabel` prefixes messages so a chain's failures are attributable.
  */
+/** State name -> code, for the region-coherence check in validatePlan. */
+const EVAL_STATE_NAMES = {
+  alabama: "al", alaska: "ak", arizona: "az", arkansas: "ar", california: "ca", colorado: "co",
+  connecticut: "ct", delaware: "de", florida: "fl", georgia: "ga", hawaii: "hi", idaho: "id",
+  illinois: "il", indiana: "in", iowa: "ia", kansas: "ks", kentucky: "ky", louisiana: "la",
+  maine: "me", maryland: "md", massachusetts: "ma", michigan: "mi", minnesota: "mn",
+  mississippi: "ms", missouri: "mo", montana: "mt", nebraska: "ne", nevada: "nv",
+  "new hampshire": "nh", "new jersey": "nj", "new mexico": "nm", "new york": "ny",
+  "north carolina": "nc", "north dakota": "nd", ohio: "oh", oklahoma: "ok", oregon: "or",
+  pennsylvania: "pa", "rhode island": "ri", "south carolina": "sc", "south dakota": "sd",
+  tennessee: "tn", texas: "tx", utah: "ut", vermont: "vt", virginia: "va", washington: "wa",
+  "west virginia": "wv", wisconsin: "wi", wyoming: "wy",
+};
+
 export function validatePlan(spec, itinerary, placeRows, opts = {}) {
   const fails = [];
   const warns = [];
@@ -712,16 +734,69 @@ export function validatePlan(spec, itinerary, placeRows, opts = {}) {
     }
   }
 
+  // --- does the plan actually go WHERE THE TRAVELER ASKED?
+  //
+  // This check exists because its absence let a 368 km retrieval error read as a
+  // green run. place_centroid averaged the coordinates of every fuzzy city match,
+  // so the resolved centre landed in a state nobody asked about: "Austin" planned
+  // a trip around Longview, "Phoenix" around Eagar, "Monterey" around Paso Robles,
+  // "New York" around Ramsey, New Jersey.
+  //
+  // EVERY OTHER CHECK IN THIS FILE PASSED on those plans. The ids were real rows,
+  // the candidate anchor held, no price and no invented fact appeared, latency was
+  // fine. Not one of them asked the question a traveler would ask first, which is
+  // whether the courses are anywhere near the place in the brief.
+  //
+  // A WARN, not a fail, and a coarse tripwire rather than a measurement: it aims
+  // at a centre in the wrong STATE, not at policing trip radius.
+  //
+  // KNOWN FALSE POSITIVE, so do not read a warn here as a defect on its own. A
+  // correct plan for a named city often schedules its neighbours rather than the
+  // city itself: "Monterey" warns because the right answer is Pebble Beach, Del
+  // Monte Forest and Pacific Grove, and not one row says "Monterey".
+  //
+  // THE RIGHT VERSION OF THIS CHECK IS GEOGRAPHIC, not lexical: hold an expected
+  // centre per prompt and assert the scheduled courses sit within some radius of
+  // it. That needs coordinates this harness does not fetch — fetchPlaces selects
+  // no lat/lng, and `location` is a geography column PostgREST will render as
+  // GeoJSON given `Accept: application/geo+json`. Worth doing; left undone here.
+  const asked = String(spec.input.region ?? "").trim().toLowerCase();
+  if (asked) {
+    const stateCode = asked.length === 2 ? asked : EVAL_STATE_NAMES[asked];
+    const scheduled = [...new Set(days.flatMap((d) => (d.places ?? []).map((p) => p.id)))]
+      .map((id) => byId.get(id))
+      .filter(Boolean);
+    const inRegion = scheduled.some((p) => {
+      const city = String(p.city ?? "").toLowerCase();
+      const reg = String(p.region ?? "").toLowerCase();
+      return (stateCode && reg === stateCode) || (city && (city.includes(asked) || asked.includes(city)));
+    });
+    if (scheduled.length > 0 && !inRegion) {
+      const where = [...new Set(scheduled.map((p) => `${p.city}, ${p.region}`))].slice(0, 3).join(" / ");
+      warns.push(`${at}no scheduled course is in "${spec.input.region}" by city or state — plan covers ${where}`);
+    }
+  }
+
   const text = planProse(itinerary);
 
   // --- zero non-database courses (prose half): names in notes must be the
   //     plan's own courses. The prompt forbids naming anything else.
   const planNames = placeRows.map((p) => normalizeName(p.name)).filter(Boolean);
-  for (const raw of text.match(COURSE_NAME_RE) ?? []) {
-    if (!looksLikeCourseName(raw)) continue; // "Golf", "Links", "The Golf gods"
-    const mention = normalizeName(raw);
-    const known = planNames.some((n) => n.includes(mention) || mention.includes(n));
-    if (!known) fails.push(`${at}prose names a course that is not in this plan: "${raw.trim()}"`);
+  // PER SENTENCE, not over the whole blob. COURSE_NAME_RE walks up to five
+  // capitalised words backwards from a course noun, and both its `\s+` and the
+  // `.` inside its word class cross a full stop happily — so "…out on the
+  // Monterey Peninsula.\nLinks golf all week" matched as one course name,
+  // "Monterey Peninsula. Links", which is not a course and is in no plan. That is
+  // a false FAIL manufactured by the scanner, and it is not exotic: a sentence
+  // ending in a capitalised place followed by one opening with Links or Golf is
+  // ordinary prose here. A name cannot span a sentence boundary.
+  for (const sentence of String(text ?? "").split(/(?<=[.!?])\s+|\n+/)) {
+    for (const raw of sentence.match(COURSE_NAME_RE) ?? []) {
+      if (!looksLikeCourseName(raw)) continue; // "Golf", "Links", "The Golf gods"
+      const mention = normalizeName(raw);
+      const known = planNames.some((n) => n.includes(mention) || mention.includes(n));
+      if (!known) fails.push(`${at}prose names a course that is not in this plan: "${raw.trim()}"`);
+    }
   }
 
   // --- zero price claims
@@ -945,12 +1020,15 @@ function selectedSessions() {
  * failure — and so the pass rate counts turns, which is the unit that matters
  * when the question is "does grounding survive a conversation".
  */
-async function runSession(jwt, spec) {
+async function runSession(jwt, spec, planCall) {
   const rows = [];
   const label = (t) => `${spec.id}/${t}`;
 
   process.stdout.write(`${label("create").padEnd(24)} `);
-  const first = await callPlanner(jwt, { mode: "create", input: spec.input });
+  // The create goes through planCall so it can clear the cap and retry; the
+  // refine turns below deliberately do not, since a reset would delete this trip.
+  const call0 = planCall ?? ((input) => callPlanner(jwt, input));
+  const first = await call0({ mode: "create", input: spec.input });
   if (first.status !== 200 || !first.body?.itinerary) {
     const why = `http ${first.status} error=${first.body?.error ?? "<none>"}`;
     console.log(`FAIL  ${why} (${first.ms}ms)`);
@@ -1071,11 +1149,18 @@ async function runSession(jwt, spec) {
 
 function printTurn(fails, warns, courses, ms, body) {
   const g = body?.guard;
+  // scrubbedName is NOT added into this total. It is a REASON, not a fourth
+  // bucket: the function bumps it alongside the scrubbedWhy or scrubbedNote for
+  // the same field, so adding it here would count one removal twice.
   const scrub = g ? g.scrubbedWhy + g.scrubbedNote + g.droppedIds : 0;
   console.log(
     `${fails.length ? "FAIL" : "ok  "}  ${courses} courses, ${ms}ms` +
       (warns.length ? `  (${warns.length} warn)` : "") +
-      (scrub ? `  [server guard fired: ${g.droppedIds} id, ${g.scrubbedWhy} why, ${g.scrubbedNote} note]` : ""),
+      (scrub
+        ? `  [server guard fired: ${g.droppedIds} id, ${g.scrubbedWhy} why, ${g.scrubbedNote} note` +
+          (g.scrubbedName ? `, ${g.scrubbedName} of them for naming a course not in the plan` : "") +
+          `]`
+        : ""),
   );
   for (const f of fails) console.log(`        FAIL  ${f}`);
   for (const w of warns) console.log(`        warn  ${w}`);
@@ -1127,22 +1212,57 @@ async function main() {
     return 1;
   }
 
+  const resetNow = async (why) => {
+    if (!canReset) return false;
+    console.log(`  quota: ${why} — clearing the eval account's ledger`);
+    await resetQuota(userId); // re-asserts the MARKER_EVAL_USER_ID guard every time
+    used = 0;
+    return true;
+  };
+
+  /**
+   * One planner call, with the monthly cap HANDLED rather than PREDICTED.
+   *
+   * The local `used` counter cannot be trusted to see the cap coming, and the
+   * previous version of this loop bet the whole run on it. The function claims a
+   * plan_turns row BEFORE the model call, so every 502 planner_failed spends a
+   * plan the harness never counted — it only incremented on a 200. Six failing
+   * prompts put the function's real count six ahead of ours: it hit 20 while we
+   * read 14, and from there every remaining call returned 429. A 429 is not a
+   * 200, so `used` stopped moving, so the `used >= PRO_CAP` reset never fired,
+   * and the whole tail of the suite — every brief-* prompt and all five sessions,
+   * the cases this feature actually turns on — failed on quota rather than merit.
+   *
+   * So the 429 itself is the trigger now. The counter survives only as a cheap
+   * way to reset BEFORE hitting the wall rather than after.
+   *
+   * `allowReset: false` is for turns INSIDE a session: resetQuota deletes
+   * trip_plans, which would delete the very trip the session is refining.
+   */
+  const planCall = async (input, { allowReset = true } = {}) => {
+    if (allowReset && canReset && used >= PRO_CAP) await resetNow(`local count reached ${PRO_CAP}`);
+    let call = await callPlanner(jwt, input);
+    if (call.status === 429 && call.body?.error === "monthly_limit" && allowReset) {
+      if (await resetNow("the function reported monthly_limit")) call = await callPlanner(jwt, input);
+    }
+    // Anything that reached the model claimed a ledger turn — a 502 included. A
+    // 4xx below 429 is refused before the claim and costs nothing.
+    if (call.status === 200 || call.status >= 500) used += 1;
+    return call;
+  };
+
   const results = [];
   for (const spec of prompts) {
-    if (used >= PRO_CAP) {
-      if (!canReset) {
-        console.error(`\nQuota exhausted after ${results.length} prompts. Re-run with --reset-quota.`);
-        return 1;
-      }
-      await resetQuota(userId);
-      used = 0;
+    if (!canReset && used >= PRO_CAP) {
+      console.error(`\nQuota exhausted after ${results.length} prompts. Re-run with --reset-quota.`);
+      return 1;
     }
     process.stdout.write(`${spec.id.padEnd(24)} `);
     let fails = [];
     let warns = [];
     let call;
     try {
-      call = await callPlanner(jwt, spec.input);
+      call = await planCall(spec.input);
     } catch (err) {
       console.log(`FAIL  transport: ${err.message}`);
       results.push({ id: spec.id, ms: 0, fails: [`transport: ${err.message}`], warns: [] });
@@ -1166,7 +1286,6 @@ async function main() {
       continue;
     }
 
-    used += 1; // a 200 means the function spent a plan against the cap
     if (expected) fails.push(`expected one of [${expected.join(", ")}] but the planner returned a plan`);
 
     // A create that returns no id did not persist. This is asserted explicitly
@@ -1204,17 +1323,18 @@ async function main() {
   // --- multi-turn sessions
   if (sessions.length > 0) console.log("");
   for (const spec of sessions) {
-    if (used >= PRO_CAP) {
-      if (!canReset) {
-        console.error(`\nQuota exhausted before session ${spec.id}. Re-run with --reset-quota.`);
-        return 1;
-      }
-      await resetQuota(userId);
-      used = 0;
+    if (!canReset && used >= PRO_CAP) {
+      console.error(`\nQuota exhausted before session ${spec.id}. Re-run with --reset-quota.`);
+      return 1;
     }
-    used += 1; // one plan row per session, however many turns it runs
+    // Reset BETWEEN sessions, never inside one. A session's refine turns spend the
+    // separate refinement budget (8/trip, 60/month), and clearing that budget
+    // mid-session is not an option anyway: resetQuota deletes trip_plans, which
+    // would delete the trip the session is in the middle of refining. Starting
+    // each session on a clean ledger is what keeps that from ever being needed.
+    if (canReset) await resetNow(`starting session ${spec.id}`);
     try {
-      results.push(...(await runSession(jwt, spec)));
+      results.push(...(await runSession(jwt, spec, planCall)));
     } catch (err) {
       console.log(`FAIL  transport: ${err.message}`);
       results.push({ id: spec.id, ms: 0, fails: [`transport: ${err.message}`], warns: [] });
@@ -1251,7 +1371,11 @@ async function main() {
     console.log(`  of which refinement turns: ${refineFailed.length}/${refineRows.length} failing`);
   }
   console.log(`warnings       ${warned}`);
-  console.log(`server guard   ${guardHits} ungrounded item(s) removed before the client saw them`);
+  const nameHits = results.reduce((n, r) => n + (r.guard?.scrubbedName ?? 0), 0);
+  console.log(
+    `server guard   ${guardHits} ungrounded item(s) removed before the client saw them` +
+      (nameHits ? `, ${nameHits} for naming a course that is not in the plan` : ""),
+  );
   console.log(`p95 latency    ${p95}ms  ${p95 && p95 < 15000 ? "(under 15s target)" : "(OVER 15s target)"}`);
 
   const jsonPath = flagValue("json");

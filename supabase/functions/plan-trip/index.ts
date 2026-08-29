@@ -303,6 +303,8 @@ interface Guard {
   scrubbedWhy: number;
   scrubbedNote: number;
   droppedIds: number;
+  /** Prose dropped for naming a course that is not in the rendered itinerary. */
+  scrubbedName: number;
 }
 type Usage = Record<string, number>;
 
@@ -507,11 +509,40 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number): nu
 /** Fixed precision so a coordinate round-tripped through jsonb is byte-stable. */
 const fix6 = (n: number) => Number(n.toFixed(6));
 
-/** Resolve a free-text region to a center point using our own places data. */
-async function resolveRegion(region: string): Promise<{ lat: number; lng: number } | null> {
-  const q = region.trim();
-  if (!q) return null;
-  const STATE_NAMES: Record<string, string> = {
+/**
+ * Resolve a free-text region to a center point using our own places data.
+ *
+ * DO NOT REPLACE THIS WITH public.place_centroid(). That RPC is
+ * `avg(lat), avg(lng) ... where city ilike search_city`, and we called it with
+ * `%q%`, so it returned the MEAN OF EVERY MATCHING CITY IN THE COUNTRY. The mean
+ * of several real places is a place where none of them are, and it landed
+ * hundreds of kilometres out with no error anywhere:
+ *
+ *     Austin    -> 32.53,-94.91  Longview, EAST TEXAS   (368 km out)
+ *     Denver    -> 39.16,-95.04  eastern KANSAS         (856 km out)
+ *     Pinehurst -> 36.14,-82.29  Tri-Cities, TENNESSEE  (275 km out)
+ *     Phoenix   -> 33.93,-109.49 the NM border          (244 km out)
+ *     Portland  -> 44.16,-95.46  MINNESOTA              (2141 km out)
+ *
+ * Note the shape of the failure: latitude often looked about right while
+ * longitude was dragged across the country, because the matching cities differ
+ * more in longitude than latitude. It reads as a plausible coordinate.
+ *
+ * WHAT IT ACTUALLY BROKE was not retrieval, which happily returned 40 real
+ * courses around the wrong point, but the MODEL, which could see the candidates
+ * were in the wrong state and correctly refused to plan an Austin trip out of
+ * Longview — returning `days: []` with an honest `unmet`. That surfaced as a bare
+ * 502 planner_failed on six eval prompts and, far worse, as a SILENT PASS on the
+ * ones where the drift was small enough for the model to go along with it. A
+ * plausible plan for the wrong city is the more expensive of the two failures.
+ *
+ * The fix is to cluster before averaging: take the real coordinates, group them
+ * by state, and average only the dominant group. The median is used rather than
+ * the mean so one stray row inside the winning state cannot drag the centre.
+ * Coordinates come back as GeoJSON — `location` is a geography column, and
+ * PostgREST renders it as WKB hex unless asked for `application/geo+json`.
+ */
+const STATE_NAMES: Record<string, string> = {
     alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA", colorado: "CO",
     connecticut: "CT", delaware: "DE", florida: "FL", georgia: "GA", hawaii: "HI", idaho: "ID",
     illinois: "IL", indiana: "IN", iowa: "IA", kansas: "KS", kentucky: "KY", louisiana: "LA",
@@ -521,21 +552,101 @@ async function resolveRegion(region: string): Promise<{ lat: number; lng: number
     "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK", oregon: "OR",
     pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC", "south dakota": "SD",
     tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT", virginia: "VA", washington: "WA",
-    "west virginia": "WV", wisconsin: "WI", wyoming: "WY",
+  "west virginia": "WV", wisconsin: "WI", wyoming: "WY",
+};
+
+const median = (xs: number[]): number => {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+/** Real coordinates of every place whose city matches `pattern` (an ilike pattern). */
+async function cityPoints(pattern: string): Promise<Array<{ region: string; lat: number; lng: number }>> {
+  const res = await fetch(
+    `${SB_URL}/rest/v1/places?niche_id=eq.${NICHE}` +
+      `&city=ilike.${encodeURIComponent(pattern)}&select=region,location&limit=2000`,
+    { headers: { ...sbHeaders, Accept: "application/geo+json" } },
+  ).catch(() => null);
+  if (!res || !res.ok) return [];
+  const body = await res.json().catch(() => null);
+  const feats = (body as { features?: unknown[] } | null)?.features;
+  if (!Array.isArray(feats)) return [];
+  return feats
+    .map((f) => {
+      const ft = f as { properties?: { region?: string }; geometry?: { coordinates?: number[] } };
+      const c = ft.geometry?.coordinates;
+      return { region: ft.properties?.region ?? "", lat: Number(c?.[1]), lng: Number(c?.[0]) };
+    })
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+}
+
+/**
+ * The largest same-state group of `points`, centred on its median. Ties break on
+ * the state code so the same query always resolves to the same place.
+ */
+function dominantCluster(
+  points: Array<{ region: string; lat: number; lng: number }>,
+): { lat: number; lng: number; region: string } | null {
+  if (points.length === 0) return null;
+  const byRegion = new Map<string, Array<{ lat: number; lng: number }>>();
+  for (const p of points) {
+    const k = p.region || "??";
+    if (!byRegion.has(k)) byRegion.set(k, []);
+    byRegion.get(k)!.push(p);
+  }
+  let best: { region: string; rows: Array<{ lat: number; lng: number }> } | null = null;
+  for (const [region, rows] of byRegion) {
+    if (!best || rows.length > best.rows.length || (rows.length === best.rows.length && region < best.region)) {
+      best = { region, rows };
+    }
+  }
+  return {
+    region: best!.region,
+    lat: median(best!.rows.map((r) => r.lat)),
+    lng: median(best!.rows.map((r) => r.lng)),
   };
+}
 
-  // City match first (specific beats broad), then state.
-  const cityPts = await sbGet<Array<{ lat: number; lng: number }>>(
-    `rpc/place_centroid?search_city=${encodeURIComponent("%" + q + "%")}&niche=${NICHE}`,
+async function stateCentroid(state: string): Promise<{ lat: number; lng: number } | null> {
+  const pts = await sbGet<Array<{ lat: number; lng: number }>>(
+    `rpc/state_centroid?state_code=${state}&niche=${NICHE}`,
   ).catch(() => []);
-  if (cityPts.length > 0 && cityPts[0].lat != null) return cityPts[0];
+  return pts.length > 0 && pts[0].lat != null ? { lat: pts[0].lat, lng: pts[0].lng } : null;
+}
 
+async function resolveRegion(region: string): Promise<{ lat: number; lng: number } | null> {
+  const q = region.trim();
+  if (!q) return null;
   const state = q.length === 2 ? q.toUpperCase() : STATE_NAMES[q.toLowerCase()];
+
+  // A bare two-letter code is a state, never a city. It also must never reach the
+  // `%q%` fallback below: `%CA%` matches 554 rows across the country (Carlsbad,
+  // Cary, Decatur…) and averaging those is exactly the bug this function exists
+  // to avoid.
+  if (q.length === 2) {
+    const st = state ? await stateCentroid(state) : null;
+    return st ?? null;
+  }
+
+  const exact = dominantCluster(await cityPoints(q));
+  // A city wins when it is unambiguous, or when it agrees with the state name it
+  // shares. "Oregon" is the case this guards: there is an Oregon, ILLINOIS with
+  // two courses, and it must not outrank the state of Oregon. "New York" resolves
+  // to the city, because the winning cluster is in NY and the city is the more
+  // specific reading.
+  if (exact && (!state || exact.region === state)) return exact;
   if (state) {
-    const statePts = await sbGet<Array<{ lat: number; lng: number }>>(
-      `rpc/state_centroid?state_code=${state}&niche=${NICHE}`,
-    ).catch(() => []);
-    if (statePts.length > 0 && statePts[0].lat != null) return statePts[0];
+    const st = await stateCentroid(state);
+    if (st) return st;
+  }
+  if (exact) return exact;
+
+  // Substring is the last resort, and only for a query long enough that a partial
+  // match means something ("Myrtle" -> Myrtle Beach).
+  if (q.length >= 4) {
+    const fuzzy = dominantCluster(await cityPoints(`%${q}%`));
+    if (fuzzy) return fuzzy;
   }
   return null;
 }
@@ -641,6 +752,22 @@ const PRICE_RE = [
 const hasPriceClaim = (t: string) => PRICE_RE.some((re) => re.test(t));
 
 /**
+ * Admitting a gap in OUR data, in prose the traveler reads.
+ *
+ * RULES already says "never mention that a value is missing or unknown — plan
+ * around it silently", and like the course-name rule it had no enforcement behind
+ * it. It is the same class of leak: "par not available" tells the traveler
+ * something about our database rather than about the golf, invites them to
+ * distrust every other figure on the page, and reads as an apology for a fact we
+ * simply chose not to store. A field's absence is not a fact about the course.
+ *
+ * Mirrors MISSING_DATA_PATTERNS in tooling/eval/plan-trip-eval.mjs.
+ */
+const MISSING_DATA_RE =
+  /\b(?:unknown|not (?:listed|available|provided|specified)|no (?:data|information) (?:on|for)|unspecified|n\/a)\b/i;
+const admitsMissingData = (t: string) => MISSING_DATA_RE.test(t);
+
+/**
  * A number is exempt from the check when it is small enough to be bookkeeping —
  * a day number, a hole count, a month, a small ordinal — UNLESS it is carrying a
  * unit, in which case its size says nothing about whether it is a claim.
@@ -684,6 +811,161 @@ function ungroundedNumbers(text: string, allowed: Set<number>): string[] {
     bad.push(tok);
   }
   return bad;
+}
+
+/**
+ * NAMES, the other half of grounding. RULES already says summary, notes, `why`,
+ * `change_summary` and `unmet` may name only courses that appear in the itinerary
+ * — and until now nothing enforced it. The prose gate checked numbers and prices;
+ * a course name is neither, so it walked straight through. core-4 shipped a plan
+ * whose prose recommended "World Tour Links", a course that was in the candidate
+ * list but not in the plan, and the server reported zero removals.
+ *
+ * That is the same class of defect as an invented price, and arguably worse: the
+ * name reads as a recommendation, the traveler goes looking for it, and there is
+ * nothing in the itinerary to tap. It being a REAL course does not help — it is
+ * still a course this plan does not contain.
+ *
+ * WHAT THIS CAN AND CANNOT PROVE. We hold every candidate's name, so "named a
+ * candidate that was not scheduled" is decidable exactly, and that is what this
+ * enforces. A course from outside the candidate list entirely is NOT decidable
+ * here — we would need a list of every course on earth — so RULES still carries
+ * the instruction and this closes the half that is checkable. Do not read a zero
+ * from this counter as proof the prose named nothing invented.
+ *
+ * SCHEDULED NAMES ARE MASKED FIRST, longest first. Course names nest: a scheduled
+ * "Grande Dunes Resort Club" contains the unscheduled "Grande Dunes", and without
+ * masking, legitimate prose about the scheduled course would be destroyed by the
+ * unscheduled one hiding inside its name.
+ */
+const nameKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/** `nameKey` output is [a-z0-9 ] only, so a token boundary is all the anchoring needed. */
+const wholeName = (k: string) => new RegExp(`(?<![a-z0-9])${k}(?![a-z0-9])`, "g");
+
+function ungroundedNames(text: string, scheduled: string[], candidates: string[]): string[] {
+  if (!text) return [];
+  let hay = nameKey(text);
+  const scheduledKeys = [...new Set(scheduled.map(nameKey))].filter((k) => k.length >= 4);
+  // Mask what IS in the plan before looking for what is not — longest first, so a
+  // scheduled name is consumed whole rather than leaving a shorter unscheduled
+  // name exposed inside it.
+  for (const k of scheduledKeys.sort((a, b) => b.length - a.length)) hay = hay.replace(wholeName(k), " ");
+
+  const scheduledSet = new Set(scheduledKeys);
+  const bad: string[] = [];
+  for (const c of candidates) {
+    const k = nameKey(c);
+    // Short names are too collision-prone to enforce on, and a name that is also
+    // a scheduled name is fine by definition.
+    if (k.length < 6 || scheduledSet.has(k)) continue;
+    if (wholeName(k).test(hay)) bad.push(c);
+  }
+  return bad;
+}
+
+/**
+ * THE OTHER HALF OF THE NAME PROBLEM: a course that is not in CANDIDATES AT ALL.
+ *
+ * ungroundedNames above can only prove "this is a candidate we did not schedule",
+ * because the candidate list is the only set of course names we hold. It cannot
+ * catch "Augusta National" or "Royal Melbourne", which is precisely what a model
+ * reaches for when a traveler asks for a famous course by name — and what the
+ * eval caught in a changeSummary reading "I can't add Augusta National or Cypress
+ * Point". Both are real, neither is in the list, and naming them puts a course the
+ * traveler cannot tap into text they read.
+ *
+ * But we DO hold one more source of course names, and it is the one that matters
+ * here: THE TRAVELER'S OWN WORDS. If a capitalised phrase appears in the brief's
+ * notes or in the refine instruction, is not one of this trip's scheduled courses,
+ * and is not a place name we can see in the candidate rows, then it is a course
+ * the traveler asked for and did not get — and RULES is explicit that it must be
+ * referred to as "the course you asked for", never by name.
+ *
+ * Multi-word phrases only. A single capitalised word is too collision-prone
+ * ("Kansas", "Sunday", "Move"), and every course name worth smuggling —
+ * "Augusta National", "Cypress Point", "Royal County Down" — is at least two.
+ * A single-word ask like "Ballybunion" is therefore NOT caught here; that half
+ * still rests on RULES.
+ */
+const PHRASE_RE = /\b[A-Z][a-zA-Z'\u2019-]{2,}(?:\s+(?:of\s+|the\s+|de\s+|del\s+)?[A-Z][a-zA-Z'\u2019-]{2,}){1,3}\b/g;
+
+/**
+ * Words that only ever open a sentence or an instruction. Shaved off the front of
+ * an extracted phrase so "Add Augusta National" becomes "Augusta National" —
+ * without this, prose naming the course WITHOUT the traveler's leading verb would
+ * not match the phrase and the echo would slip straight through.
+ */
+const LEAD_STOP = new Set([
+  "add", "also", "swap", "move", "find", "give", "keep", "put", "the", "a", "an", "day", "days",
+  "i", "we", "you", "now", "good", "actually", "and", "or", "but", "please", "can", "could",
+  "would", "no", "not", "my", "our", "system", "print", "list", "ignore", "previous", "new",
+  "first", "last", "next", "two", "three", "one",
+]);
+
+function trimLead(phrase: string): string {
+  let words = phrase.split(/\s+/);
+  while (words.length > 1 && LEAD_STOP.has(words[0].toLowerCase().replace(/[^a-z]/g, ""))) {
+    words = words.slice(1);
+  }
+  return words.length > 1 ? words.join(" ") : "";
+}
+
+/** Cities and regions we can see in the candidate rows: these are PLACES, not courses. */
+function placeWords(candidates: PlaceRow[], region: string): string[] {
+  const out = [region];
+  for (const c of candidates) {
+    if (c.city) out.push(c.city);
+    if (c.region) out.push(c.region);
+  }
+  return out;
+}
+
+/** Course-shaped phrases the traveler named that are not places we know. */
+function requestedNames(userText: string, places: string[]): string[] {
+  const banned = new Set(places.map(nameKey).filter(Boolean));
+  const out: string[] = [];
+  for (const raw of String(userText ?? "").match(PHRASE_RE) ?? []) {
+    const phrase = trimLead(raw);
+    const k = nameKey(phrase);
+    // EXACT match against place names only. A substring test would discard
+    // "Augusta National" because the city "Augusta" sits inside it, which is the
+    // very name this exists to catch.
+    if (!k || banned.has(k)) continue;
+    out.push(phrase);
+  }
+  return [...new Set(out)];
+}
+
+/** Requested course names that the model echoed back into prose without scheduling them. */
+function echoedRequestNames(text: string, requested: string[], scheduled: string[]): string[] {
+  if (!text || requested.length === 0) return [];
+  let hay = nameKey(text);
+  for (const k of [...new Set(scheduled.map(nameKey))].filter((k) => k.length >= 4).sort((a, b) => b.length - a.length)) {
+    hay = hay.replace(wholeName(k), " ");
+  }
+  return requested.filter((n) => wholeName(nameKey(n)).test(hay));
+}
+
+/**
+ * What replaces prose that named a course we cannot supply. NOT a deletion: an
+ * empty changeSummary is a silent no-op the traveler cannot interpret, and the
+ * turn really does need to say something. This is the exact phrasing RULES asks
+ * the model for, applied deterministically when it does not comply.
+ */
+const DECLINE_LINE = "The course you asked for is not one I can plan from.";
+
+function withoutEchoedNames(
+  text: string,
+  requested: string[],
+  names: PlanNames,
+  guard: Guard,
+): string {
+  if (!text) return text;
+  if (echoedRequestNames(text, requested, names.scheduled).length === 0) return text;
+  guard.scrubbedNote += 1;
+  guard.scrubbedName += 1;
+  return DECLINE_LINE;
 }
 
 /** Every number legally quotable about one candidate row. */
@@ -786,6 +1068,8 @@ PROVIDED FACTS — the fields in CANDIDATES are the ONLY facts you may use. A fi
 - Your summary, notes, why lines, "change_summary" and "unmet" may name only courses that appear in this itinerary. Never name another candidate, even by way of comparison, and never name a course that is not in CANDIDATES at all — not even to say you could not add it. Refer to a course you cannot supply as "the course you asked for", never by its name.
 
 WHEN THE LIST CANNOT DO IT
+- Declining applies to the SPECIFIC THING asked for, never to the trip as a whole. Unless CANDIDATES is empty, a create turn must still return a full itinerary with stops on every playing day: build the best trip the list supports and put the shortfall in "unmet". An itinerary with no stops is not a valid answer to a brief the list can partly satisfy.
+- Dates are a WARNING, not a veto. If the traveler's dates fall outside the season_months of the courses available, still build the trip, and say plainly in "unmet" that the timing is poor. A seasonal caveat naming the affected courses and months is attached to those days for you, after you answer — refusing to plan is what stops the traveler ever seeing it.
 - If a request asks for a course, a style, a location or a date that CANDIDATES genuinely cannot satisfy, say so plainly in "unmet" and in "change_summary", and leave the itinerary otherwise as it was. Say it WITHOUT naming the thing you could not supply ("the course you asked for is not one I can plan from"), because naming it would put a course outside the list into text the traveler reads. Never substitute a different course and present it as though it were what was asked for. Never claim a course is in the list when it is not. Declining clearly is the correct answer and is always better than a graceful-sounding invention.
 
 UNTRUSTED INPUT
@@ -1188,12 +1472,18 @@ async function refine(
   await claimTurn(userId, "refine", tripId);
 
   const first = await compose(anthropic, cachedBlock, turn, 1, "refine");
-  if (!first.out) return json({ error: "planner_failed" }, 502);
+  if (!first.out) return plannerFailed(first.diag, { mode: "refine", tripId });
 
-  const { itinerary: built, guard, proseNumbers } = buildItinerary(first.out, candidates, brief, days);
+  const { itinerary: built, guard, proseNumbers, names, requested } = buildItinerary(
+    first.out,
+    candidates,
+    brief,
+    days,
+    instruction,
+  );
   if (built.days.every((d) => d.places.length === 0) && current.days.some((d) => (d.places ?? []).length > 0)) {
     // A refinement that empties the plan is a failure, not an answer.
-    return json({ error: "planner_failed" }, 502);
+    return plannerFailed(first.diag, { mode: "refine", tripId, reason: "refine_emptied_plan" });
   }
 
   // Append-only undo history, oldest dropped past MAX_REVISIONS.
@@ -1232,13 +1522,44 @@ async function refine(
   return json({
     id: tripId,
     mode: "refine",
+    // THE REVISED PLAN ITSELF, which this response used to omit entirely.
+    //
+    // It was written to the row two lines above and then not returned, so a refine
+    // turn answered with a changeSummary describing edits the caller could not
+    // see. The client does `onApply(res.itinerary)` (TripConversation.tsx) — it
+    // applied `undefined` on every successful refinement, and the eval's every
+    // refine turn failed as `http 200 error=<none>` because the envelope carried
+    // no itinerary to validate. A create returns its plan; so does a refine.
+    //
+    // Note it is `built` — the same object committed to the row, already through
+    // buildItinerary's guards — and not a re-read of the row, so the caller cannot
+    // be handed a version some concurrent write replaced after our CAS.
+    itinerary: built,
     // change_summary and unmet are rendered verbatim in the client's chat log, so
     // they get the SAME number gate as the itinerary prose, not just the price
     // check they used to get. A refusal turn naturally reaches for a figure —
     // "day 2 now stays inside 30 km" — and 30 is not a fact we hold unless it is
     // a hop we computed or the traveler's own stated limit.
-    changeSummary: groundedProse(first.out.change_summary, 400, proseNumbers, guard),
-    unmet: groundedProse(first.out.unmet, 300, proseNumbers, guard),
+    // …and the SAME name gate. `change_summary` is the field most likely to reach
+    // for a course it did not schedule ("kept X, dropped Y for Z"), and Z being a
+    // real course the traveler cannot tap is the failure the whole design exists
+    // to prevent.
+    // …and the ECHO gate on top, which is the only one that can see a course from
+    // outside CANDIDATES entirely. `requested` is built from the traveler's own
+    // instruction and notes, so "Add Augusta National" makes "Augusta National" a
+    // name this turn may not print unless it actually scheduled it.
+    changeSummary: withoutEchoedNames(
+      groundedProse(first.out.change_summary, 400, proseNumbers, guard, names),
+      requested,
+      names,
+      guard,
+    ),
+    unmet: withoutEchoedNames(
+      groundedProse(first.out.unmet, 300, proseNumbers, guard, names),
+      requested,
+      names,
+      guard,
+    ),
     refinementsUsed: used + 1,
     refinementsRemaining: Math.max(0, REFINEMENTS_PER_TRIP - (used + 1)),
     revisionCount: revisions.length,
@@ -1553,7 +1874,16 @@ async function create(
     result = turnResult.out ? buildItinerary(turnResult.out, pinned, storedBrief, days) : null;
   }
   if (!turnResult.out || !result || result.itinerary.days.every((d) => d.places.length === 0)) {
-    return json({ error: "planner_failed" }, 502);
+    return plannerFailed(turnResult.diag, {
+      mode: "create",
+      region: input.region,
+      center: { lat: fix6(center.lat), lng: fix6(center.lng) },
+      candidates: pinned.length,
+      // The region and the courses we actually retrieved, together, in one line.
+      // A mismatch between them is a RETRIEVAL failure wearing a planner's coat —
+      // see resolveRegion — and it is invisible unless both are printed here.
+      sample: pinned.slice(0, 3).map((c) => `${c.name} (${c.city}, ${c.region})`),
+    });
   }
 
   // ---- persist. `request` stays for old readers; brief/candidate_ids are the new
@@ -1599,7 +1929,14 @@ async function create(
     mode: "create",
     itinerary: result.itinerary,
     changeSummary: "",
-    unmet: groundedProse(turnResult.out.unmet, 300, result.proseNumbers, result.guard),
+    // Same echo gate. On a create the traveler's words are the brief's notes, which
+    // is where "put Royal County Down on day 1" arrives.
+    unmet: withoutEchoedNames(
+      groundedProse(turnResult.out.unmet, 300, result.proseNumbers, result.guard, result.names),
+      result.requested,
+      result.names,
+      result.guard,
+    ),
     refinementsUsed: 0,
     refinementsRemaining: REFINEMENTS_PER_TRIP,
     revisionCount: 0,
@@ -1683,7 +2020,7 @@ async function compose(
   turn: string,
   attempt: number,
   mode: "create" | "refine",
-): Promise<{ out: ModelOut | null; usage: Usage }> {
+): Promise<{ out: ModelOut | null; usage: Usage; diag?: ComposeDiag }> {
   // Only a refine turn is worth a cache write, and only when the prefix is long
   // enough to be cacheable at all.
   const cache = mode === "refine" && isCacheablePrefix(candidateBlock);
@@ -1726,13 +2063,94 @@ async function compose(
     console.log("plan-trip usage", JSON.stringify(usage));
 
     const block = res.content.find((b: { type: string }) => b.type === "text") as { text: string } | undefined;
-    const parsed = JSON.parse(block?.text ?? "") as ModelOut;
-    return { out: parsed && Array.isArray(parsed.days) ? parsed : null, usage };
+    const text = block?.text ?? "";
+    // WHY THIS IS SPELLED OUT rather than left to `JSON.parse(x ?? "")` inside the
+    // try: every distinguishable failure here used to collapse into one silent
+    // `out: null` and then into a bare 502, which is how a REGION-RESOLUTION bug
+    // spent its life looking like a model failure. The three cases below are
+    // genuinely different problems and must not read the same in the logs:
+    //   no text block  — a refusal or a tool-only turn (stop_reason says which)
+    //   parse failure  — truncation at max_tokens, or malformed JSON
+    //   days not array — schema satisfied but the shape is unusable
+    const diag: ComposeDiag = {
+      attempt,
+      stop_reason: String((res as { stop_reason?: string }).stop_reason ?? ""),
+      block_types: res.content.map((b: { type: string }) => b.type),
+      text_len: text.length,
+    };
+    if (!block) {
+      diag.failure = "no_text_block";
+      diag.stop_details = (res as { stop_details?: unknown }).stop_details ?? null;
+      console.error("plan-trip compose: no text block", JSON.stringify(diag));
+      return { out: null, usage, diag };
+    }
+    let parsed: ModelOut;
+    try {
+      parsed = JSON.parse(text) as ModelOut;
+    } catch (e) {
+      diag.failure = "json_parse";
+      diag.parse_error = e instanceof Error ? e.message : String(e);
+      diag.head = text.slice(0, 400);
+      diag.tail = text.slice(-400);
+      console.error("plan-trip compose: unparseable output", JSON.stringify(diag));
+      return { out: null, usage, diag };
+    }
+    if (!parsed || !Array.isArray(parsed.days)) {
+      diag.failure = "days_not_array";
+      diag.head = text.slice(0, 400);
+      console.error("plan-trip compose: days missing", JSON.stringify(diag));
+      return { out: null, usage, diag };
+    }
+    // A well-formed answer that schedules nothing is the model DECLINING, and it
+    // says why in `summary`/`unmet`. Carry that text into the diagnostic: it is
+    // the single most useful string when a plan comes back empty, and losing it
+    // is what made the region bug invisible.
+    if (parsed.days.every((d) => (d?.stops?.length ?? 0) === 0)) {
+      diag.failure = "no_stops";
+      diag.model_summary = String(parsed.summary ?? "").slice(0, 400);
+      diag.model_unmet = String(parsed.unmet ?? "").slice(0, 400);
+      console.error("plan-trip compose: model scheduled no stops", JSON.stringify(diag));
+    }
+    return { out: parsed, usage, diag };
   } catch (err) {
-    console.error("plan-trip compose failed", err instanceof Error ? err.message : String(err));
-    return { out: null, usage: {} };
+    const msg = err instanceof Error ? err.message : String(err);
+    const status = (err as { status?: number }).status;
+    console.error("plan-trip compose failed", status ?? "", msg);
+    return { out: null, usage: {}, diag: { attempt, failure: "api_error", api_status: status, message: msg } };
   }
 }
+
+/**
+ * Why a turn produced nothing usable. Logged always; returned to the caller only
+ * when PLAN_TRIP_DIAG is set, because it can quote model output.
+ */
+interface ComposeDiag {
+  attempt: number;
+  failure?: string;
+  stop_reason?: string;
+  stop_details?: unknown;
+  block_types?: string[];
+  text_len?: number;
+  parse_error?: string;
+  head?: string;
+  tail?: string;
+  model_summary?: string;
+  model_unmet?: string;
+  api_status?: number;
+  message?: string;
+}
+
+/**
+ * Diagnostics are OFF unless the function's own env says otherwise, and the flag
+ * is a secret rather than a request header on purpose: a header any caller can
+ * set is a way for any caller to read raw model output back out of a failure.
+ * Turn it on with `supabase secrets set PLAN_TRIP_DIAG=1`, reproduce, turn it off.
+ */
+const DIAG = Deno.env.get("PLAN_TRIP_DIAG") === "1";
+const plannerFailed = (diag: ComposeDiag | undefined, extra: Record<string, unknown> = {}) => {
+  console.error("plan-trip: planner_failed", JSON.stringify({ ...extra, diag: diag ?? null }));
+  return json({ error: "planner_failed", ...(DIAG ? { diag, ...extra } : {}) }, 502);
+};
 
 // ---------------------------------------------------------------- validation
 
@@ -1755,14 +2173,30 @@ const isoDate = (v: unknown): string | undefined =>
  * `guard` is bumped when something is dropped, so the eval and the logs can see
  * that the server caught it rather than that the model got it right.
  */
-function groundedProse(text: unknown, max: number, allowed: Set<number>, guard?: Guard): string {
+function groundedProse(
+  text: unknown,
+  max: number,
+  allowed: Set<number>,
+  guard?: Guard,
+  names?: PlanNames,
+): string {
   const s = String(text ?? "").trim().slice(0, max);
   if (!s) return "";
-  if (hasPriceClaim(s) || ungroundedNumbers(s, allowed).length > 0) {
-    if (guard) guard.scrubbedNote += 1;
+  const nameHits = names ? ungroundedNames(s, names.scheduled, names.unscheduled) : [];
+  if (hasPriceClaim(s) || admitsMissingData(s) || ungroundedNumbers(s, allowed).length > 0 || nameHits.length > 0) {
+    if (guard) {
+      guard.scrubbedNote += 1;
+      if (nameHits.length > 0) guard.scrubbedName += 1;
+    }
     return "";
   }
   return s;
+}
+
+/** Course names as the rendered itinerary sees them: what is in the plan, and what is not. */
+interface PlanNames {
+  scheduled: string[];
+  unscheduled: string[];
 }
 
 const unionNumbers = (a: Set<number>, extra: number[]): Set<number> => {
@@ -1790,9 +2224,11 @@ function buildItinerary(
   candidates: PlaceRow[],
   brief: Brief,
   days: number,
-): { itinerary: Itinerary; guard: Guard; proseNumbers: Set<number> } {
+  /** The traveler's words for THIS turn — a refine instruction. Brief notes are read from `brief`. */
+  userText = "",
+): { itinerary: Itinerary; guard: Guard; proseNumbers: Set<number>; names: PlanNames; requested: string[] } {
   const allowed = new Map(candidates.map((c) => [c.id, c]));
-  const guard: Guard = { scrubbedWhy: 0, scrubbedNote: 0, droppedIds: 0 };
+  const guard: Guard = { scrubbedWhy: 0, scrubbedNote: 0, droppedIds: 0, scrubbedName: 0 };
 
   const rawDays = (Array.isArray(out.days) ? out.days : [])
     .map((d) => {
@@ -1823,6 +2259,21 @@ function buildItinerary(
     for (const { row } of d.kept) for (const n of allowedNumbersFor(row)) globalNumbers.add(n);
   }
 
+  // Names legal anywhere in this plan's prose: exactly the courses it schedules.
+  // Every OTHER candidate is a name the model was given and did not put in the
+  // plan, so naming one in prose is a recommendation the traveler cannot act on.
+  const scheduledIds = new Set(rawDays.flatMap((d) => d.kept.map((k) => k.row.id)));
+  const names: PlanNames = {
+    scheduled: [...new Set(rawDays.flatMap((d) => d.kept.map((k) => k.row.name)))].filter(Boolean),
+    unscheduled: candidates.filter((c) => !scheduledIds.has(c.id)).map((c) => c.name).filter(Boolean),
+  };
+  // Courses the traveler NAMED and did not get — the only handle we have on a
+  // course from outside CANDIDATES entirely. See requestedNames.
+  const requested = requestedNames(
+    `${brief.notes ?? ""}\n${userText}`,
+    placeWords(candidates, String(brief.region ?? "")),
+  );
+
   // Flat sequence of stops across the whole trip, for the hop distances. Indexed
   // explicitly because the same course may legitimately appear on two days.
   const sequence: Array<{ dayIdx: number; stopIdx: number; row: PlaceRow }> = [];
@@ -1845,13 +2296,26 @@ function buildItinerary(
       // `why` is scoped to one course, so it can be checked against exactly that
       // course's fields — the tightest grounding check available anywhere here.
       let clean = String(why ?? "").trim().slice(0, 160);
+      // RULES already forbids "no comparison to a course that is not in this
+      // itinerary"; this is what enforces it.
+      const nameHits = [
+        ...ungroundedNames(clean, names.scheduled, names.unscheduled),
+        ...echoedRequestNames(clean, requested, names.scheduled),
+      ];
       const ok =
         clean.length > 0 &&
         !hasPriceClaim(clean) &&
+        !admitsMissingData(clean) &&
         terrainMisclaim(clean, row.attrs) === null &&
-        ungroundedNumbers(clean, allowedNumbersFor(row, nextHopKm != null ? [nextHopKm] : [])).length === 0;
+        ungroundedNumbers(clean, allowedNumbersFor(row, nextHopKm != null ? [nextHopKm] : [])).length === 0 &&
+        nameHits.length === 0;
       if (!ok) {
-        if (clean.length > 0) guard.scrubbedWhy += 1;
+        if (clean.length > 0) {
+          guard.scrubbedWhy += 1;
+          if (nameHits.length > 0) guard.scrubbedName += 1;
+        }
+        // `why` is the one field with a deterministic replacement rather than a
+        // deletion, so a name violation costs the stop nothing.
         clean = factualWhy(row) ?? "";
       }
 
@@ -1885,8 +2349,21 @@ function buildItinerary(
 
     let note = String(d.note ?? "").trim().slice(0, 400);
     const hops = places.map((p) => p.nextHopKm).filter((n): n is number => n != null);
-    if (note && (hasPriceClaim(note) || ungroundedNumbers(note, unionNumbers(globalNumbers, hops)).length > 0)) {
+    const noteNames = note
+      ? [
+        ...ungroundedNames(note, names.scheduled, names.unscheduled),
+        ...echoedRequestNames(note, requested, names.scheduled),
+      ]
+      : [];
+    if (
+      note &&
+      (hasPriceClaim(note) ||
+        admitsMissingData(note) ||
+        ungroundedNumbers(note, unionNumbers(globalNumbers, hops)).length > 0 ||
+        noteNames.length > 0)
+    ) {
       guard.scrubbedNote += 1;
+      if (noteNames.length > 0) guard.scrubbedName += 1;
       note = "";
     }
 
@@ -1905,14 +2382,30 @@ function buildItinerary(
   ]);
 
   let summary = String(out.summary ?? "").trim().slice(0, 600);
-  if (summary && (hasPriceClaim(summary) || ungroundedNumbers(summary, proseNumbers).length > 0)) {
+  const summaryNames = summary
+    ? [
+      ...ungroundedNames(summary, names.scheduled, names.unscheduled),
+      ...echoedRequestNames(summary, requested, names.scheduled),
+    ]
+    : [];
+  if (
+    summary &&
+    (hasPriceClaim(summary) || admitsMissingData(summary) ||
+      ungroundedNumbers(summary, proseNumbers).length > 0 || summaryNames.length > 0)
+  ) {
     guard.scrubbedNote += 1;
+    if (summaryNames.length > 0) guard.scrubbedName += 1;
     summary = "";
   }
   // Something the candidate set could not do is part of what the traveler needs to
   // read, so it is folded into the summary rather than living only in a field the
   // client might ignore.
-  const unmet = groundedProse(out.unmet, 300, proseNumbers);
+  const unmet = withoutEchoedNames(
+    groundedProse(out.unmet, 300, proseNumbers, undefined, names),
+    requested,
+    names,
+    guard,
+  );
   if (unmet) {
     summary = summary ? `${summary} ${unmet}`.slice(0, 900) : unmet;
   }
@@ -1921,6 +2414,8 @@ function buildItinerary(
     itinerary: { summary, days: built.filter((d) => d.places.length > 0 || d.note.length > 0) },
     guard,
     proseNumbers,
+    names,
+    requested,
   };
 }
 
