@@ -153,9 +153,13 @@ interface RegionEntry {
 let cityIndex: Map<string, CityEntry> | null = null;
 let regionIndex: Map<string, RegionEntry> | null = null;
 let tagCounts: Map<string, number> | null = null;
+// Fuzzy-match prefilter: cities bucketed by first letter of their normalized
+// name, so a typo pass only ever scans the ~1/26th of the 7.7k-city index
+// that could plausibly match (see searchAll's fuzzy fallback).
+let cityByFirstLetter: Map<string, CityEntry[]> | null = null;
 
 function ensureIndexes() {
-  if (cityIndex && regionIndex && tagCounts) return;
+  if (cityIndex && regionIndex && tagCounts && cityByFirstLetter) return;
   const cities = new Map<string, { city: string; region: string; count: number; sumLat: number; sumLng: number }>();
   const regions = new Map<string, { count: number; sumLat: number; sumLng: number }>();
   const tags = new Map<string, number>();
@@ -194,6 +198,78 @@ function ensureIndexes() {
     ]),
   );
   tagCounts = tags;
+
+  const byLetter = new Map<string, CityEntry[]>();
+  for (const entry of cityIndex.values()) {
+    const letter = norm(entry.city).charAt(0);
+    if (!letter) continue;
+    const bucket = byLetter.get(letter);
+    if (bucket) bucket.push(entry);
+    else byLetter.set(letter, [entry]);
+  }
+  cityByFirstLetter = byLetter;
+}
+
+/**
+ * Levenshtein edit distance, capped at `max`: bails out (returns `max + 1`)
+ * as soon as every cell in a row exceeds `max`, since no later cell can then
+ * come back under the cap. Candidates are pre-filtered by first letter and
+ * length window before this ever runs, so in practice it's called on a
+ * couple dozen short strings per keystroke, not the full index.
+ */
+function boundedEditDistance(a: string, b: string, max: number): number {
+  const al = a.length;
+  const bl = b.length;
+  if (Math.abs(al - bl) > max) return max + 1;
+  let prevRow = new Array<number>(bl + 1);
+  for (let j = 0; j <= bl; j++) prevRow[j] = j;
+  for (let i = 1; i <= al; i++) {
+    const curRow = new Array<number>(bl + 1);
+    curRow[0] = i;
+    let rowMin = curRow[0];
+    for (let j = 1; j <= bl; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curRow[j] = Math.min(curRow[j - 1] + 1, prevRow[j] + 1, prevRow[j - 1] + cost);
+      if (curRow[j] < rowMin) rowMin = curRow[j];
+    }
+    if (rowMin > max) return max + 1;
+    prevRow = curRow;
+  }
+  return prevRow[bl];
+}
+
+/**
+ * Max edit distance allowed for a fuzzy candidate, scaled to query length so
+ * a short query can't match half the index: at 4-6 chars a single edit is
+ * already ~15-25% of the string, so 1 is the ceiling before noise takes
+ * over; at 7+ chars two edits stays in roughly the same proportional range
+ * (e.g. 2/9 for "Scotsdale" vs "Scottsdale") while covering realistic
+ * double-letter/transposition typos like "Pebbel" -> "Pebble".
+ */
+function fuzzyMaxDistance(qLen: number): number {
+  return qLen <= 6 ? 1 : 2;
+}
+
+/**
+ * Ranks and caps fuzzy candidates, then applies a "more prominent than what
+ * we already found" gate: if the exact/prefix pass already matched a real
+ * place, a same-distance fuzzy alternative is only worth surfacing when it's
+ * a bigger/more-established place than that match (higher pin count). This
+ * is what tells "Scotsdale" (typo, a 1-pin town) apart from "Scottsdale"
+ * (correct, a 33-pin destination) without ever showing a count to the user:
+ * the typo surfaces the bigger place as a fallback suggestion, but typing
+ * the bigger place correctly doesn't dredge up the obscure same-ish-named
+ * town as noise. When nothing matched at all (existingMaxCount 0), any
+ * in-bound candidate is fair game.
+ */
+function pickFuzzyMatches<T extends { count: number }>(
+  candidates: { entry: T; dist: number }[],
+  existingMaxCount: number,
+  limit: number,
+): T[] {
+  const pool = existingMaxCount > 0 ? candidates.filter((c) => c.entry.count > existingMaxCount) : candidates;
+  pool.sort((a, b) => a.dist - b.dist || b.entry.count - a.entry.count);
+  return pool.slice(0, limit).map((c) => c.entry);
 }
 
 /**
@@ -220,12 +296,15 @@ export function searchAll(query: string, opts: SearchAllOptions = {}): SearchRes
   const exact: SearchResult[] = [];
   const placeStarts: SearchResult[] = [];
   const rest: SearchResult[] = [];
+  const fuzzy: SearchResult[] = [];
   const placeIncludes: SearchResult[] = [];
 
   // --- region: exact 2-letter code, exact full name, or a >=4-char name prefix ---
   const codeQuery = raw.toUpperCase();
   const regionRows = [...regionIndex!.entries()].sort((a, b) => b[1].count - a[1].count);
   let regionCount = 0;
+  let regionMaxCount = 0;
+  const matchedRegionCodes = new Set<string>();
   for (const [region, v] of regionRows) {
     if (regionCount >= 2) break;
     const regionName = CODE_TO_STATE_NAME[region] ?? region;
@@ -237,20 +316,68 @@ export function searchAll(query: string, opts: SearchAllOptions = {}): SearchRes
     const entry: SearchResult = { kind: "region", region, regionName, count: v.count, lat: v.lat, lng: v.lng };
     if (isExactCode || isExactName) exact.push(entry);
     else rest.push(entry);
+    matchedRegionCodes.add(region);
+    regionMaxCount = Math.max(regionMaxCount, v.count);
     regionCount++;
   }
 
   // --- city: name startsWith query, >=2 chars ---
   const cityRows = [...cityIndex!.entries()].sort((a, b) => b[1].count - a[1].count);
   let cityCount = 0;
-  for (const [, v] of cityRows) {
+  let cityMaxCount = 0;
+  const matchedCityKeys = new Set<string>();
+  for (const [key, v] of cityRows) {
     if (cityCount >= 3) break;
     const nameNorm = norm(v.city);
     if (!nameNorm.startsWith(q)) continue;
     const entry: SearchResult = { kind: "city", city: v.city, region: v.region, count: v.count, lat: v.lat, lng: v.lng };
     if (nameNorm === q) exact.push(entry);
     else rest.push(entry);
+    matchedCityKeys.add(key);
+    cityMaxCount = Math.max(cityMaxCount, v.count);
     cityCount++;
+  }
+
+  // --- fuzzy fallback: only when the exact/prefix pass left room under the
+  // per-kind cap, and only once the query is long enough (>=4 chars) that an
+  // edit-distance match means something. See fuzzyMaxDistance and
+  // pickFuzzyMatches for the thresholds and the "more prominent than what we
+  // already found" gate that keeps a correctly-typed query from dredging up
+  // an obscure same-ish-named place as noise.
+  if (q.length >= 4) {
+    const maxDist = fuzzyMaxDistance(q.length);
+
+    if (regionCount < 2) {
+      const regionCandidates: { entry: RegionEntry & { region: string; regionName: string }; dist: number }[] = [];
+      for (const [region, v] of regionIndex!) {
+        if (matchedRegionCodes.has(region)) continue;
+        const regionName = CODE_TO_STATE_NAME[region] ?? region;
+        const nameNorm = norm(regionName);
+        if (Math.abs(nameNorm.length - q.length) > maxDist) continue;
+        const dist = boundedEditDistance(q, nameNorm, maxDist);
+        if (dist <= maxDist) regionCandidates.push({ entry: { ...v, region, regionName }, dist });
+      }
+      for (const entry of pickFuzzyMatches(regionCandidates, regionMaxCount, 2 - regionCount)) {
+        fuzzy.push({ kind: "region", region: entry.region, regionName: entry.regionName, count: entry.count, lat: entry.lat, lng: entry.lng });
+      }
+    }
+
+    if (cityCount < 3) {
+      const letter = q.charAt(0);
+      const bucket = cityByFirstLetter!.get(letter) ?? [];
+      const cityCandidates: { entry: CityEntry; dist: number }[] = [];
+      for (const v of bucket) {
+        const nameNorm = norm(v.city);
+        const key = `${nameNorm}|${v.region}`;
+        if (matchedCityKeys.has(key) || nameNorm.startsWith(q)) continue;
+        if (Math.abs(nameNorm.length - q.length) > maxDist) continue;
+        const dist = boundedEditDistance(q, nameNorm, maxDist);
+        if (dist <= maxDist) cityCandidates.push({ entry: v, dist });
+      }
+      for (const entry of pickFuzzyMatches(cityCandidates, cityMaxCount, 3 - cityCount)) {
+        fuzzy.push({ kind: "city", city: entry.city, region: entry.region, count: entry.count, lat: entry.lat, lng: entry.lng });
+      }
+    }
   }
 
   // --- tag: caller-supplied filter label startsWith query, >=3 chars ---
@@ -274,7 +401,7 @@ export function searchAll(query: string, opts: SearchAllOptions = {}): SearchRes
     else if (q.length >= 3 && n.includes(q)) placeIncludes.push({ kind: "place", pin: p });
   }
 
-  return [...exact, ...placeStarts, ...rest, ...placeIncludes].slice(0, limit);
+  return [...exact, ...placeStarts, ...rest, ...fuzzy, ...placeIncludes].slice(0, limit);
 }
 
 export function nearest(lat: number, lng: number, limit = 25): Pin[] {
