@@ -18,7 +18,7 @@ import type { TripTemplate } from "@marker/core";
 import { skin } from "../../skin";
 import { colors, radii, spacing, type } from "../../ui/theme";
 import { searchPins } from "../../lib/pins";
-import { dayDate, localDateString } from "../../lib/dates";
+import { dayDate, localDateString, nextMonthStart } from "../../lib/dates";
 import { useAuth } from "../../providers/auth";
 import {
   fetchPlaceBySlug,
@@ -45,6 +45,7 @@ import {
   useVoteTrip,
   visitErrorMessage,
   type Friend,
+  type PlanTripDecline,
   type PublishedTrip,
   type TripBrief,
   type TripItinerary,
@@ -217,16 +218,31 @@ export default function TripsScreen() {
   const [revisionCount, setRevisionCount] = useState(0);
   const [unmet, setUnmet] = useState<string | undefined>(undefined);
   const [errorText, setErrorText] = useState<string | null>(null);
+  // A decline is a complete, honest answer, not a failure (see generate()) —
+  // kept apart from errorText/result so it never renders in the error style
+  // and never mounts TripConversation (id is null: nothing was saved).
+  // region/days ride along so "try this window" can resubmit the same trip.
+  const [decline, setDecline] = useState<{ info: PlanTripDecline; region: string; days: number } | null>(null);
   // Bumping the nonce forces TripPlannerForm to remount with fresh initial
-  // values — the simplest way to re-seed an uncontrolled form from "Tune it".
-  const [prefill, setPrefill] = useState<{ region: string; days: number; nonce: number }>({
+  // values — the simplest way to re-seed an uncontrolled form from "Tune it"
+  // or from a decline's "try this window" affordance.
+  const [prefill, setPrefill] = useState<{
+    region: string;
+    days: number;
+    startDate: string | null;
+    endDate: string | null;
+    nonce: number;
+  }>({
     region: "",
     days: 3,
+    startDate: null,
+    endDate: null,
     nonce: 0,
   });
 
   const generate = async (brief: TripBrief) => {
     setErrorText(null);
+    setDecline(null);
     setResult(null);
     setTripId(null);
     setRefinementsRemaining(null);
@@ -234,6 +250,16 @@ export default function TripsScreen() {
     setUnmet(undefined);
     try {
       const res = await planTrip.mutateAsync(brief);
+      if (res.mode === "declined") {
+        // STATUS 200, DELIBERATELY (see plan-trip): the request was fine,
+        // the season is shut. `id` is null on purpose — no row was saved,
+        // so there is nothing to refine and TripConversation must not
+        // mount. Render the decline's own message; never the itinerary
+        // (its days are always empty here) and never the error style.
+        if (res.decline) setDecline({ info: res.decline, region: brief.region, days: brief.days });
+        else setErrorText("Something went wrong building your trip. Try again.");
+        return;
+      }
       setResult(res.itinerary);
       setTripId(res.id);
       setRefinementsRemaining(res.refinementsRemaining);
@@ -262,12 +288,32 @@ export default function TripsScreen() {
     }
   };
 
+  // The decline's one actionable piece: re-seed the form with the same
+  // region/days and a start date inside the measured playable window, then
+  // let the traveler review and regenerate themselves (this does not
+  // resubmit on its own — same "set fields, don't auto-fire" pattern as
+  // "Tune it" below).
+  const tryPlayableWindow = () => {
+    const window = decline?.info.playableWindow;
+    if (!decline || !window) return;
+    setDecline(null);
+    setPrefill((p) => ({
+      region: decline.region,
+      days: decline.days,
+      startDate: nextMonthStart(window.startMonth),
+      endDate: null,
+      nonce: p.nonce + 1,
+    }));
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+  };
+
   return (
     <>
       <ScrollView
         ref={scrollRef}
         style={styles.container}
         contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl * 2 }}
+        keyboardShouldPersistTaps="handled"
       >
         <Text style={type.title}>{skin.vocab.planTrip}</Text>
         <Text style={[type.caption, { marginTop: spacing.xs, marginBottom: spacing.md }]}>
@@ -316,10 +362,14 @@ export default function TripsScreen() {
           key={prefill.nonce}
           initialRegion={prefill.region}
           initialDays={prefill.days}
+          initialStartDate={prefill.startDate}
+          initialEndDate={prefill.endDate}
           pending={planTrip.isPending}
           errorText={errorText}
           onSubmit={generate}
         />
+
+        {decline && <DeclineCard decline={decline.info} onTryWindow={tryPlayableWindow} />}
 
         {result && (
           <>
@@ -348,7 +398,7 @@ export default function TripsScreen() {
             key={t.slug}
             template={t}
             onTune={(tuneRegion, tuneDays) =>
-              setPrefill((p) => ({ region: tuneRegion, days: tuneDays, nonce: p.nonce + 1 }))
+              setPrefill((p) => ({ region: tuneRegion, days: tuneDays, startDate: null, endDate: null, nonce: p.nonce + 1 }))
             }
           />
         ))}
@@ -435,6 +485,32 @@ function shareTrip(itinerary: TripItinerary, title?: string) {
     if (d.note) lines.push(d.note);
   }
   Share.share({ message: lines.join("\n") }).catch(() => {});
+}
+
+/**
+ * `mode: "declined"` rendered as what it is: a complete, honest answer, not
+ * a failure. Never the red error-caption style used for save_failed/
+ * region_not_found — those are things that went wrong; this is the planner
+ * telling you the trip isn't possible as asked, plus (when the season data
+ * supports it) the one useful next step. `decline.message` stands alone —
+ * `unmet` is deliberately not read here, since it can legitimately be empty.
+ */
+function DeclineCard({ decline, onTryWindow }: { decline: PlanTripDecline; onTryWindow: () => void }) {
+  return (
+    <View style={styles.resultCard}>
+      <View style={styles.declineHeader}>
+        <Ionicons name="calendar-outline" size={18} color={colors.primary} />
+        <Text style={type.heading}>Not this trip, not those dates</Text>
+      </View>
+      <Text style={[type.body, { marginTop: spacing.xs }]}>{decline.message}</Text>
+      {decline.playableWindow && (
+        <Pressable style={styles.declineCta} onPress={onTryWindow}>
+          <Ionicons name="sparkles-outline" size={16} color="#FFF" />
+          <Text style={styles.declineCtaText}>Try {decline.playableWindow.label}</Text>
+        </Pressable>
+      )}
+    </View>
+  );
 }
 
 function Itinerary({
@@ -1155,6 +1231,18 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginTop: spacing.md,
   },
+  declineHeader: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  declineCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    height: 46,
+    borderRadius: 4,
+    backgroundColor: colors.primary,
+    marginTop: spacing.sm,
+  },
+  declineCtaText: { color: "#FFF", fontSize: 14, fontWeight: "700" },
   saveAll: {
     flexDirection: "row",
     gap: spacing.xs,

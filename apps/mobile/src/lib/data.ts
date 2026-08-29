@@ -427,19 +427,56 @@ async function planTripErrorCode(error: unknown): Promise<PlanTripError> {
 }
 
 /**
- * plan-trip's response envelope — identical field set across all three
- * modes, so one type covers create/refine/undo. `changeSummary` is "" on
- * create; `unmet` is "" unless the candidate set genuinely couldn't satisfy
- * the request (that's the planner declining rather than inventing — always
- * worth showing when non-empty). `revisionCount` is the source of truth for
- * whether Undo has anything to restore; `refinementsUsed`/`refinementsRemaining`
- * track the per-trip cap, but a monthly cap can also fire a `refinement_limit`
- * error even while `refinementsRemaining` is still positive, so callers must
- * handle that error rather than gating solely on the counter.
+ * The measured season window a decline can point a traveler toward — computed
+ * server-side from the candidates' own stored season data, never the model's
+ * say-so. `label` is the ready-to-render "April to October" string.
+ */
+export interface PlanTripPlayableWindow {
+  startMonth: number;
+  endMonth: number;
+  months: number[];
+  label: string;
+  basis: { candidates: number; withSeason: number; agreeing: number };
+}
+
+/**
+ * A `mode: "declined"` response's payload: a complete, honest answer rather
+ * than a failure — the request was fine, the world (season) is shut.
+ * `playableWindow` is null when the data can't support a claim (year-round
+ * regions, thin season data); render `message` alone in that case.
+ */
+export interface PlanTripDecline {
+  reason: "season";
+  message: string;
+  months: number[];
+  monthsLabel: string;
+  playableWindow: PlanTripPlayableWindow | null;
+}
+
+/**
+ * plan-trip's response envelope — identical field set across create/refine/
+ * undo, plus a `declined` mode that only `create` can return. `changeSummary`
+ * is "" on create; `unmet` is "" unless the candidate set genuinely couldn't
+ * satisfy the request (that's the planner declining rather than inventing —
+ * always worth showing when non-empty). `revisionCount` is the source of
+ * truth for whether Undo has anything to restore; `refinementsUsed`/
+ * `refinementsRemaining` track the per-trip cap, but a monthly cap can also
+ * fire a `refinement_limit` error even while `refinementsRemaining` is still
+ * positive, so callers must handle that error rather than gating solely on
+ * the counter.
+ *
+ * `mode: "declined"` is a 200, not an error: `id` is null (nothing was
+ * saved, so the refinement conversation must never mount off this response),
+ * `itinerary` is well-formed but empty (`days: []`) for a caller that only
+ * knows how to render one, and `decline` carries the real answer. `unmet` can
+ * legitimately be empty here too — it goes through the same prose scrubber as
+ * any plan — so `decline.message` must stand on its own; never build UI that
+ * assumes `unmet` is present.
  */
 export interface PlanTripResponse {
   id: string | null;
-  mode: "create" | "refine" | "undo";
+  mode: "create" | "refine" | "undo" | "declined";
+  decline?: PlanTripDecline;
   itinerary: TripItinerary;
   changeSummary: string;
   unmet: string;

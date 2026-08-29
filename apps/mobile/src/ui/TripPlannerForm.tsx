@@ -1,10 +1,11 @@
-import React, { useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import React, { useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Keyboard, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { skin } from "../skin";
 import { colors, spacing, type } from "./theme";
 import { dayDate, localDateString } from "../lib/dates";
+import { searchAll, type SearchResult } from "../lib/pins";
 import type { TripBrief } from "../lib/data";
 
 /** Rotates while a plan is being built — same cadence as the old single-shot form. */
@@ -112,15 +113,22 @@ const HOP_OPTIONS: Array<{ label: string; km: number | undefined }> = [
  * never hardcodes a tag's meaning, so a re-skin changes the whole
  * vocabulary for free.
  */
+/** A region-input suggestion: only the two kinds a trip's "where to" field means. Never a single place, never a filter chip. */
+type RegionSuggestion = Extract<SearchResult, { kind: "city" | "region" }>;
+
 export function TripPlannerForm({
   initialRegion = "",
   initialDays = 3,
+  initialStartDate = null,
+  initialEndDate = null,
   pending,
   errorText,
   onSubmit,
 }: {
   initialRegion?: string;
   initialDays?: number;
+  initialStartDate?: string | null;
+  initialEndDate?: string | null;
   pending: boolean;
   errorText: string | null;
   onSubmit: (brief: TripBrief) => void;
@@ -129,14 +137,33 @@ export function TripPlannerForm({
   const [days, setDays] = useState(initialDays);
   // Distinct from `days`: a 5-day trip can carry 4 of these and a rest day.
   const [roundsCount, setRoundsCount] = useState(initialDays);
-  const [startDate, setStartDate] = useState<string | null>(null);
-  const [endDate, setEndDate] = useState<string | null>(null);
+  const [startDate, setStartDate] = useState<string | null>(initialStartDate);
+  const [endDate, setEndDate] = useState<string | null>(initialEndDate);
+  // Auto-open the date row when a caller (the decline "try this window"
+  // affordance) hands us dates already — otherwise they'd be set but hidden
+  // behind "More options".
+  const [expanded, setExpanded] = useState(!!initialStartDate || !!initialEndDate);
+  // Assist, not a gate: free text always still works (the server resolves
+  // it), this just offers real, correctly-spelled places to tap instead of
+  // making someone guess a city's exact spelling. Runs over the same bundled,
+  // offline index the map screen searches — no network call, and no counts
+  // per suggestion (those were deliberately dropped from map search too).
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const suggestions = useMemo<RegionSuggestion[]>(() => {
+    const q = region.trim();
+    if (q.length < 2) return [];
+    // Ask for more than we show: place-name matches interleave with city/
+    // region hits in searchAll's ranking, so a low limit can crowd out the
+    // very results this field wants. Filter down to city/region, then cap.
+    return searchAll(q, { limit: 40 })
+      .filter((r): r is RegionSuggestion => r.kind === "city" || r.kind === "region")
+      .slice(0, 5);
+  }, [region]);
   const [maxHopKm, setMaxHopKm] = useState<number | undefined>(undefined);
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
   const [includeWishlist, setIncludeWishlist] = useState(false);
   const [avoidPlayed, setAvoidPlayed] = useState(false);
   const [notes, setNotes] = useState("");
-  const [expanded, setExpanded] = useState(false);
   // Belt-and-suspenders against a double-tap landing two submits before
   // `pending` (React state, not synchronous) has re-rendered the disabled
   // button — same guard as TripConversation's sendingRef, and for the same
@@ -171,6 +198,18 @@ export function TripPlannerForm({
     });
   };
 
+  // resolveRegion's exact-city match keys off the bare city string, and a
+  // 2-letter code sends a state straight through its own fast path
+  // (bypassing the city lookup entirely — see resolveRegion server-side).
+  // Neither format accepts a combined "city, state" string, so what we send
+  // is not the "City, ST" label shown in the list — that label exists only
+  // to disambiguate the tap.
+  const pickSuggestion = (s: RegionSuggestion) => {
+    setRegion(s.kind === "city" ? s.city : s.region);
+    setSuggestionsOpen(false);
+    Keyboard.dismiss();
+  };
+
   return (
     <View style={styles.form}>
       <TextInput
@@ -178,8 +217,29 @@ export function TripPlannerForm({
         placeholder="Where to? (city or state)"
         placeholderTextColor={colors.textSecondary}
         value={region}
-        onChangeText={setRegion}
+        onChangeText={(t) => {
+          setRegion(t);
+          setSuggestionsOpen(true);
+        }}
+        onFocus={() => setSuggestionsOpen(true)}
+        onBlur={() => setSuggestionsOpen(false)}
       />
+      {suggestionsOpen && suggestions.length > 0 && (
+        <View style={styles.suggestions}>
+          {suggestions.map((s, i) => (
+            <Pressable
+              key={s.kind === "city" ? `city-${s.city}-${s.region}` : `region-${s.region}`}
+              style={[styles.suggestionRow, i === suggestions.length - 1 && { borderBottomWidth: 0 }]}
+              onPress={() => pickSuggestion(s)}
+            >
+              <Ionicons name={s.kind === "city" ? "location-outline" : "flag-outline"} size={15} color={colors.textSecondary} />
+              <Text style={type.body} numberOfLines={1}>
+                {s.kind === "city" ? `${s.city}, ${s.region}` : s.regionName}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
       <View style={{ flexDirection: "row", gap: spacing.sm }}>
         <Stepper label="Days" value={days} onChange={setDays} min={1} max={14} />
         <Stepper label={skin.vocab.tripStops} value={roundsCount} onChange={setRoundsCount} min={1} max={days * 2} />
@@ -278,6 +338,23 @@ export function TripPlannerForm({
 
 const styles = StyleSheet.create({
   form: { gap: spacing.sm },
+  suggestions: {
+    borderWidth: 1,
+    borderColor: "#DADAD6",
+    borderRadius: 3,
+    backgroundColor: colors.surface,
+    marginTop: -spacing.sm + 2,
+    overflow: "hidden",
+  },
+  suggestionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#E7E7E3",
+  },
   input: {
     borderWidth: 1,
     borderColor: "#DADAD6",

@@ -14,3 +14,17 @@ export function dayDate(startDate: string | null | undefined, day: number): stri
   d.setDate(d.getDate() + (day - 1));
   return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
 }
+
+/**
+ * The 1st of `month` (1-12), local time, at its nearest coming occurrence —
+ * this year if that date hasn't passed yet, next year otherwise. Turns a
+ * decline's playable-window month into a concrete date to prefill, so "Try
+ * April to October" always lands on a future April, never a stale one.
+ */
+export function nextMonthStart(month: number): string {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let d = new Date(now.getFullYear(), month - 1, 1);
+  if (d.getTime() < today.getTime()) d = new Date(now.getFullYear() + 1, month - 1, 1);
+  return localDateString(d);
+}
