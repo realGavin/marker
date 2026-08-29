@@ -18,6 +18,17 @@
 // trip's stored candidate_ids. That column is readable by the trip's owner, so
 // the harness can assert the grounding anchor directly rather than inferring it.
 //
+// Two checks were added after a 368 km retrieval bug read green across this whole
+// suite, and both are FAILS rather than warns:
+//   - checkRegionGeography: every scheduled course must sit within a measured
+//     radius of an INDEPENDENT expected centre for the region asked (see
+//     REGION_FIXTURES). Nothing else here asks whether the plan is anywhere near
+//     the place in the brief.
+//   - validateDecline: a `mode: "declined"` 200 is the planner correctly refusing
+//     an impossible request. It passes only when it carries a reason AND a
+//     playable window the requested dates fall outside — honest is not enough, it
+//     has to be useful. The matching prompt fails if a plan comes back instead.
+//
 // This runs against the DEPLOYED function (it is an end-to-end grounding check,
 // not a unit test). No dependencies — plain Node 20 ESM.
 //
@@ -122,6 +133,9 @@ const PROMPTS = [
   { id: "tiny-1", input: { region: "Ketchum", days: 2, stops: 2, budget: "any" }, allowErrors: ["region_not_found", "no_places_in_region"] },
   { id: "tiny-2", input: { region: "Truth or Consequences", days: 2, stops: 2, budget: "any" }, allowErrors: ["region_not_found", "no_places_in_region"] },
   { id: "misspell-1", input: { region: "Pebbel Beach", days: 2, stops: 2, budget: "$$$" }, allowErrors: ["region_not_found", "no_places_in_region"] },
+  // NOT actually a misspelling — see the "scotsdale" note in REGION_FIXTURES.
+  // There is a real Scotsdale, Missouri with one course, and that is where this
+  // resolves. Kept under its original id so `--only=` invocations still work.
   { id: "misspell-2", input: { region: "Scotsdale", days: 3, stops: 3, budget: "$$" }, allowErrors: ["region_not_found", "no_places_in_region"] },
 
   // --- regions with no courses (must fail, must not hallucinate) --------------
@@ -214,8 +228,150 @@ const PROMPTS = [
       startDate: "2027-01-09", endDate: "2027-01-12",
       notes: "midwinter, tell us straight if this is a bad idea",
     },
+    // You cannot golf Wisconsin in January and the planner must say so, in a
+    // 200 `mode: "declined"` carrying a playable window computed from the
+    // candidates' own season_months. This used to be a bare 502, which made the
+    // one correct answer in the suite look like a crash.
+    //
+    // THE ASSERTION IS NOT "any decline will do". validateDecline below requires
+    // the reason, a real window, and that the requested month sits OUTSIDE that
+    // window — and the other branch requires that a returned PLAN still fails,
+    // naming the courses it scheduled outside their own season. So the prompt
+    // reddens both if the planner starts scheduling January golf in Wisconsin and
+    // if the decline stops carrying advice a traveler can act on.
+    expectDecline: { reason: "season" },
   },
 ];
+
+// -----------------------------------------------------------------------------
+// Expected centres — the geographic region check
+//
+// WHY THIS EXISTS, stated once and kept: place_centroid averaged the coordinates
+// of every fuzzy city match, so "Austin" resolved 368 km east to Longview,
+// "Denver" 856 km into Kansas, "Portland" 2,141 km to Minnesota. EVERY OTHER
+// CHECK IN THIS FILE PASSED on those plans — real ids, intact candidate anchor,
+// no prices, no invented numbers, fine latency. Nothing asked the question a
+// traveler asks first: are these courses anywhere near where I said?
+//
+// The first version of the check was LEXICAL — does any scheduled course's city
+// or region string match the asked-for region — and it was left as a warn because
+// it has a structural false positive: a correct Monterey plan schedules Pebble
+// Beach, Del Monte Forest and Pacific Grove, and not one row says "Monterey". A
+// check that cries wolf on correct output is a check people learn to ignore. It
+// is gone; this replaces it.
+//
+// FIXTURES, NOT RE-RESOLUTION. The harness could resolve each region the same way
+// the function does — reimplement resolveRegion, or call the same RPCs — and that
+// was rejected outright: an oracle derived from the system under test agrees with
+// the system under test by construction. Had the harness re-resolved through
+// place_centroid it would have "expected" Longview and passed the Austin plan,
+// which is the precise failure this check exists to have caught. So the expected
+// centre is an INDEPENDENT constant — where the place actually is on Earth —
+// written down here and owing nothing to our data or our code.
+//
+// TWO RADII, because they answer different questions:
+//
+//   farKm   NO SCHEDULED COURSE MAY BE FURTHER. This is the rigorous one, and it
+//           is rigorous because of a fact about retrieval rather than about
+//           taste: places_near caps candidates at RADIUS_KM = 140 from the
+//           RESOLVED centre, so if the centre is right, EVERY course in the plan
+//           is within 140 km of it, whatever the model's preferences. The limit
+//           is therefore 140 plus the honest gap between where a place is and
+//           where its courses are.
+//
+//   nearKm  the nearest scheduled course must be this close — "does the plan
+//           touch the place asked for at all". A second angle, deliberately
+//           generous, for a centre displaced just far enough to offer nothing
+//           near the city while still fitting inside farKm. Null disables it.
+//
+// THE SLACK IS MEASURED, NOT GUESSED. resolveRegion centres a city on the median
+// of the dominant same-state cluster of courses in it; that median sits 1.5 to
+// 20.8 km from the civic coordinates below across all 17 city fixtures (worst:
+// Scottsdale, 20.8 km). So a city's farKm is 140 + ~25 + slack = 175. For a state
+// the centre is state_centroid, which sits further out because it follows course
+// density rather than geography — 49 km for Wisconsin, 127 for Florida, 160 for
+// Oregon, 164 for California — so each state carries its own measured farKm and
+// no nearKm at all: a state trip can legitimately sit entirely on one side of the
+// state, so an anchor test there would only manufacture false failures.
+//
+// CITY fixtures are the instrument; STATE fixtures are a coarse tripwire aimed at
+// a resolution landing in the wrong state and nothing finer.
+//
+// A REGION WITH NO FIXTURE IS A FAIL, not a skip. The lesson of the 368 km bug is
+// that a check which silently does not run reads exactly like a check that passed.
+//
+// `derived: true` on a fixture means its coordinates came from OUR data rather
+// than from an independent source. Such a fixture is a regression pin — it proves
+// the answer has not moved, not that it is right — and there is exactly one
+// ("scotsdale", with its reasons stated inline). Adding another needs the same
+// justification written down next to it.
+const REGION_FIXTURES = {
+  // --- cities: real-world civic coordinates -----------------------------------
+  "bandon": { lat: 43.1190, lng: -124.4084, kind: "city" },
+  "monterey": { lat: 36.6002, lng: -121.8947, kind: "city" },
+  "scottsdale": { lat: 33.4942, lng: -111.9261, kind: "city" },
+  "myrtle beach": { lat: 33.6891, lng: -78.8867, kind: "city" },
+  "pinehurst": { lat: 35.1954, lng: -79.4695, kind: "city" },
+  // The function resolves "New York" to the CITY on purpose (resolveRegion: the
+  // winning cluster is in NY and the city is the more specific reading), so the
+  // fixture is Manhattan, not the state.
+  "new york": { lat: 40.7128, lng: -74.0060, kind: "city" },
+  "austin": { lat: 30.2672, lng: -97.7431, kind: "city" },
+  "phoenix": { lat: 33.4484, lng: -112.0740, kind: "city" },
+  "chicago": { lat: 41.8781, lng: -87.6298, kind: "city" },
+  "denver": { lat: 39.7392, lng: -104.9903, kind: "city" },
+  "ketchum": { lat: 43.6810, lng: -114.3637, kind: "city" },
+  "truth or consequences": { lat: 33.1284, lng: -107.2528, kind: "city" },
+  "palm springs": { lat: 33.8303, lng: -116.5453, kind: "city" },
+  "san diego": { lat: 32.7157, lng: -117.1611, kind: "city" },
+  // Portland is genuinely ambiguous (Oregon and Maine both have one, and both
+  // have courses). The fixture is Oregon because that is the reading the prompt
+  // assumes and the larger cluster; if the function ever resolves it to Maine
+  // this check is how we find out, and the answer would be a decision about
+  // resolveRegion, not a wider radius here.
+  "portland": { lat: 45.5152, lng: -122.6784, kind: "city" },
+  "wichita": { lat: 37.6872, lng: -97.3301, kind: "city" },
+  "atlanta": { lat: 33.7490, lng: -84.3880, kind: "city" },
+  // Misspellings. These prompts are allowed to fail resolution outright; the
+  // fixture binds only if the fuzzy path DOES return a plan, in which case it had
+  // better be a plan for the place that was meant.
+  "pebbel beach": { lat: 36.5686, lng: -121.9496, kind: "city" },
+  // NOT A MISSPELLING, AND THIS CHECK IS HOW WE FOUND OUT. "Scotsdale" was added
+  // to the suite as a typo for Scottsdale, AZ. It is a real village in Jefferson
+  // County, MISSOURI, and we hold exactly one course in a city spelled that way,
+  // so resolveRegion's exact-city rule matches it and plans a Missouri trip —
+  // 1,988 km from Arizona. The lexical check this replaced actively CONCEALED
+  // that: the scheduled course's city string was "Scotsdale", the asked-for
+  // region was "Scotsdale", so it read as in-region and stayed silent.
+  //
+  // Scored as correct behaviour, not a bug: the traveler typed a real place and
+  // got that place. Preferring a 33-course city that differs by one letter over
+  // an exact match on a 1-course village would mean inventing a typo-distance
+  // heuristic with no data behind it, which is the class of unmeasured knob this
+  // codebase refuses elsewhere. Whether a near-miss on a large city should
+  // outrank an exact match on a tiny one is a live product question, recorded and
+  // deliberately NOT answered here.
+  //
+  // HONEST LIMIT ON THIS ONE FIXTURE: `derived` marks it as taken from our own
+  // data (the location of that single course) rather than from an independent
+  // source, because a village this small is not something to state coordinates
+  // for from memory — and a fabricated "independent" constant would be worse than
+  // an admitted derived one. It is therefore a REGRESSION PIN, not an oracle: it
+  // cannot prove the resolution is right, only that it has not moved. If
+  // resolveRegion is ever changed to prefer Scottsdale, this fixture must be
+  // changed with it, and the failure in between is the point.
+  "scotsdale": { lat: 38.3781, lng: -90.5794, kind: "city", derived: true },
+
+  // --- states: geographic centres --------------------------------------------
+  // farKm = 140 (retrieval radius) + the measured gap between this geographic
+  // centre and state_centroid + 40 km slack. No nearKm: see the note above.
+  "wisconsin": { lat: 44.5000, lng: -89.5000, kind: "state", farKm: 230 }, // centroid 49 km out
+  "florida": { lat: 28.6305, lng: -82.4497, kind: "state", farKm: 310 }, // centroid 127 km out
+  "oregon": { lat: 43.9336, lng: -120.5583, kind: "state", farKm: 340 }, // centroid 160 km out
+  "ca": { lat: 37.1841, lng: -119.4696, kind: "state", farKm: 350 }, // centroid 164 km out
+};
+const FIXTURE_NEAR_KM = { city: 120, state: null };
+const FIXTURE_FAR_KM = { city: 175, state: 340 };
 
 // -----------------------------------------------------------------------------
 // Multi-turn sessions
@@ -685,19 +841,207 @@ export function checkWalkableHonoured(itinerary, placeRows, input) {
  * plan never drifts outside the set the server retrieved for the first turn".
  * `opts.turnLabel` prefixes messages so a chain's failures are attributable.
  */
-/** State name -> code, for the region-coherence check in validatePlan. */
-const EVAL_STATE_NAMES = {
-  alabama: "al", alaska: "ak", arizona: "az", arkansas: "ar", california: "ca", colorado: "co",
-  connecticut: "ct", delaware: "de", florida: "fl", georgia: "ga", hawaii: "hi", idaho: "id",
-  illinois: "il", indiana: "in", iowa: "ia", kansas: "ks", kentucky: "ky", louisiana: "la",
-  maine: "me", maryland: "md", massachusetts: "ma", michigan: "mi", minnesota: "mn",
-  mississippi: "ms", missouri: "mo", montana: "mt", nebraska: "ne", nevada: "nv",
-  "new hampshire": "nh", "new jersey": "nj", "new mexico": "nm", "new york": "ny",
-  "north carolina": "nc", "north dakota": "nd", ohio: "oh", oklahoma: "ok", oregon: "or",
-  pennsylvania: "pa", "rhode island": "ri", "south carolina": "sc", "south dakota": "sd",
-  tennessee: "tn", texas: "tx", utah: "ut", vermont: "vt", virginia: "va", washington: "wa",
-  "west virginia": "wv", wisconsin: "wi", wyoming: "wy",
-};
+/**
+ * Great-circle km. Mirrors the edge function's haversineKm — a STRAIGHT LINE, not
+ * a road distance — so the radii in REGION_FIXTURES mean the same thing here as
+ * the retrieval radius means there.
+ */
+function haversineKm(aLat, aLng, bLat, bLng) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/**
+ * Does the plan actually go WHERE THE TRAVELER ASKED? See REGION_FIXTURES for the
+ * full argument; in short, the expected centre is an independent constant and the
+ * assertion is two radii against it.
+ */
+export function checkRegionGeography(spec, itinerary, placeRows) {
+  const asked = String(spec.input.region ?? "").trim();
+  const fx = REGION_FIXTURES[asked.toLowerCase()];
+  if (!fx) {
+    return [
+      `no expected centre for region "${asked}" — add one to REGION_FIXTURES. ` +
+        `A geographic check that silently does not run reads exactly like one that passed.`,
+    ];
+  }
+  const byId = new Map(placeRows.map((p) => [p.id, p]));
+  const scheduled = [...new Set((itinerary?.days ?? []).flatMap((d) => (d.places ?? []).map((p) => p.id)))]
+    .map((id) => byId.get(id))
+    .filter(Boolean);
+  if (scheduled.length === 0) return []; // nothing scheduled; other checks own that
+
+  const nearKm = fx.nearKm !== undefined ? fx.nearKm : FIXTURE_NEAR_KM[fx.kind];
+  const farKm = fx.farKm !== undefined ? fx.farKm : FIXTURE_FAR_KM[fx.kind];
+  const fails = [];
+  const measured = [];
+  for (const p of scheduled) {
+    const km = haversineKm(fx.lat, fx.lng, Number(p.lat), Number(p.lng));
+    if (!Number.isFinite(km)) {
+      // Not a skip. Without coordinates the check cannot run, and a check that
+      // cannot run must say so loudly rather than pass by omission.
+      fails.push(`${p.name} came back with no coordinates — the region check could not be run on it`);
+      continue;
+    }
+    measured.push({ p, km });
+  }
+  if (measured.length === 0) return fails;
+
+  const nearest = measured.reduce((a, b) => (b.km < a.km ? b : a));
+  if (nearKm != null && nearest.km > nearKm) {
+    fails.push(
+      `nothing in this plan is near "${asked}": the closest scheduled course is ` +
+        `${nearest.p.name} (${nearest.p.city}, ${nearest.p.region}) at ${Math.round(nearest.km)} km, ` +
+        `limit ${nearKm} km`,
+    );
+  }
+  const outliers = measured.filter((m) => m.km > farKm).sort((a, b) => b.km - a.km);
+  for (const m of outliers.slice(0, 3)) {
+    fails.push(
+      `${m.p.name} (${m.p.city}, ${m.p.region}) is ${Math.round(m.km)} km from "${asked}", ` +
+        `beyond the ${farKm} km limit — retrieval caps candidates at 140 km from the resolved centre, ` +
+        `so this means the centre itself is wrong`,
+    );
+  }
+  if (outliers.length > 3) fails.push(`…and ${outliers.length - 3} more course(s) beyond ${farKm} km of "${asked}"`);
+  return fails;
+}
+
+// -----------------------------------------------------------------------------
+// Declines
+//
+// A `mode: "declined"` 200 is the planner correctly refusing an impossible
+// request — Wisconsin in January — rather than either crashing with a 502 or,
+// worse, handing over an itinerary for courses that are shut. It is only a pass
+// when it is USEFUL: it must carry the reason and a playable window measured from
+// the candidates' own season_months, and that window must actually exclude the
+// dates asked for, or it is advice that contradicts its own refusal.
+// -----------------------------------------------------------------------------
+
+/** seasonMonths is [start, end], 1-indexed, and may wrap past December. Mirrors seasonCovers. */
+function coversMonth(range, month) {
+  if (!Array.isArray(range) || range.length !== 2) return null;
+  const [a, b] = range.map(Number);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return a <= b ? month >= a && month <= b : month >= a || month <= b;
+}
+
+/** Calendar months a brief's own dates touch. Mirrors tripMonths in the function. */
+function briefMonths(input) {
+  if (!input?.startDate || !/^\d{4}-\d{2}-\d{2}$/.test(input.startDate)) return [];
+  const start = new Date(`${input.startDate}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return [];
+  const explicit = input.endDate ? new Date(`${input.endDate}T00:00:00Z`) : null;
+  const end =
+    explicit && !Number.isNaN(explicit.getTime()) && explicit >= start
+      ? explicit
+      : new Date(start.getTime() + (Number(input.days || 1) - 1) * 86400000);
+  const months = new Set();
+  const cur = new Date(start.getTime());
+  for (let i = 0; i < 400 && cur <= end; i += 1) {
+    months.add(cur.getUTCMonth() + 1);
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return [...months].sort((a, b) => a - b);
+}
+
+/** Every check for a decline response. Returns {fails, warns}. */
+export function validateDecline(spec, body, opts = {}) {
+  const fails = [];
+  const warns = [];
+  const at = opts.turnLabel ? `${opts.turnLabel}: ` : "";
+  const want = spec.expectDecline;
+  if (!want) {
+    fails.push(`${at}planner declined but this prompt expects a plan (reason=${body?.decline?.reason ?? "<none>"})`);
+    return { fails, warns };
+  }
+
+  const d = body?.decline;
+  if (!d || typeof d !== "object") {
+    fails.push(`${at}mode is "declined" but there is no decline object to render`);
+    return { fails, warns };
+  }
+  if (d.reason !== want.reason) fails.push(`${at}decline reason is "${d.reason}", expected "${want.reason}"`);
+  if (!String(d.message ?? "").trim()) fails.push(`${at}decline carries no message`);
+  if (body.id != null) fails.push(`${at}decline returned a trip id (${body.id}) — nothing should have been persisted`);
+  if ((body.itinerary?.days ?? []).length > 0) fails.push(`${at}decline returned itinerary days; it should schedule nothing`);
+
+  // The useful half: a window, measured, that the requested dates fall outside.
+  const w = d.playableWindow;
+  const months = briefMonths(spec.input);
+  if (!w) {
+    fails.push(
+      `${at}decline carries no playable window — the traveler spent a plan to be told "no" ` +
+        `with nothing to act on, and season data is at full coverage`,
+    );
+  } else {
+    const ok =
+      Number.isInteger(w.startMonth) && w.startMonth >= 1 && w.startMonth <= 12 &&
+      Number.isInteger(w.endMonth) && w.endMonth >= 1 && w.endMonth <= 12 &&
+      Array.isArray(w.months) && w.months.length > 0 && String(w.label ?? "").trim().length > 0;
+    if (!ok) fails.push(`${at}playable window is malformed: ${JSON.stringify(w)}`);
+    else {
+      const inside = months.filter((m) => coversMonth([w.startMonth, w.endMonth], m));
+      if (inside.length > 0) {
+        fails.push(
+          `${at}the plan was refused for ${months.join(",")} but the window it offers (${w.label}) ` +
+            `covers month(s) ${inside.join(",")} — the advice contradicts the refusal`,
+        );
+      }
+      if (!(w.basis?.withSeason > 0)) warns.push(`${at}window reports no measured basis: ${JSON.stringify(w.basis)}`);
+    }
+  }
+
+  // Decline prose is rendered to the traveler, so it meets the same bar as a plan's.
+  const text = [d.message, body.unmet, body.itinerary?.summary].filter(Boolean).join("\n");
+  for (const { label, re } of PRICE_FAIL_PATTERNS) {
+    const m = text.match(re);
+    if (m) fails.push(`${at}price claim in decline (${label}): "${m[0]}"`);
+  }
+  for (const { label, re } of MISSING_DATA_PATTERNS) {
+    const m = text.match(re);
+    if (m) fails.push(`${at}${label} in decline: "${m[0]}"`);
+  }
+  for (const { label, re } of [...(spec.forbid ?? []), ...(opts.forbid ?? [])]) {
+    const m = text.match(re);
+    if (m) fails.push(`${at}${label} appeared in decline: "${m[0]}"`);
+  }
+  return { fails, warns };
+}
+
+/**
+ * The other half of an `expectDecline` prompt: what to say when a PLAN came back
+ * instead. Always a fail — the prompt asserts the request is impossible — but the
+ * message distinguishes the serious case (it scheduled courses that are shut) from
+ * the case where the fixture itself needs revisiting.
+ */
+function declineExpectedButPlanned(spec, itinerary, placeRows, at) {
+  const months = briefMonths(spec.input);
+  const byId = new Map(placeRows.map((p) => [p.id, p]));
+  const scheduled = [...new Set((itinerary?.days ?? []).flatMap((d) => (d.places ?? []).map((p) => p.id)))]
+    .map((id) => byId.get(id))
+    .filter(Boolean);
+  const shut = scheduled.filter((p) =>
+    months.length > 0 && months.every((m) => coversMonth(p.attrs?.seasonMonths, m) === false)
+  );
+  if (shut.length > 0) {
+    return (
+      `${at}expected a decline; the planner scheduled ${shut.length} course(s) whose own season_months ` +
+      `exclude every month of the trip: ` +
+      shut.slice(0, 3).map((p) => `${p.name} (months ${p.attrs.seasonMonths.join("-")})`).join(", ")
+    );
+  }
+  return (
+    `${at}expected a "${spec.expectDecline.reason}" decline but a plan came back, and the courses it ` +
+    `scheduled are in season — revisit whether this prompt is still impossible`
+  );
+}
 
 export function validatePlan(spec, itinerary, placeRows, opts = {}) {
   const fails = [];
@@ -736,45 +1080,11 @@ export function validatePlan(spec, itinerary, placeRows, opts = {}) {
 
   // --- does the plan actually go WHERE THE TRAVELER ASKED?
   //
-  // This check exists because its absence let a 368 km retrieval error read as a
-  // green run. place_centroid averaged the coordinates of every fuzzy city match,
-  // so the resolved centre landed in a state nobody asked about: "Austin" planned
-  // a trip around Longview, "Phoenix" around Eagar, "Monterey" around Paso Robles,
-  // "New York" around Ramsey, New Jersey.
-  //
-  // EVERY OTHER CHECK IN THIS FILE PASSED on those plans. The ids were real rows,
-  // the candidate anchor held, no price and no invented fact appeared, latency was
-  // fine. Not one of them asked the question a traveler would ask first, which is
-  // whether the courses are anywhere near the place in the brief.
-  //
-  // A WARN, not a fail, and a coarse tripwire rather than a measurement: it aims
-  // at a centre in the wrong STATE, not at policing trip radius.
-  //
-  // KNOWN FALSE POSITIVE, so do not read a warn here as a defect on its own. A
-  // correct plan for a named city often schedules its neighbours rather than the
-  // city itself: "Monterey" warns because the right answer is Pebble Beach, Del
-  // Monte Forest and Pacific Grove, and not one row says "Monterey".
-  //
-  // THE RIGHT VERSION OF THIS CHECK IS GEOGRAPHIC, not lexical: hold an expected
-  // centre per prompt and assert the scheduled courses sit within some radius of
-  // it. That needs coordinates this harness does not fetch — fetchPlaces selects
-  // no lat/lng, and `location` is a geography column PostgREST will render as
-  // GeoJSON given `Accept: application/geo+json`. Worth doing; left undone here.
-  const asked = String(spec.input.region ?? "").trim().toLowerCase();
-  if (asked) {
-    const stateCode = asked.length === 2 ? asked : EVAL_STATE_NAMES[asked];
-    const scheduled = [...new Set(days.flatMap((d) => (d.places ?? []).map((p) => p.id)))]
-      .map((id) => byId.get(id))
-      .filter(Boolean);
-    const inRegion = scheduled.some((p) => {
-      const city = String(p.city ?? "").toLowerCase();
-      const reg = String(p.region ?? "").toLowerCase();
-      return (stateCode && reg === stateCode) || (city && (city.includes(asked) || asked.includes(city)));
-    });
-    if (scheduled.length > 0 && !inRegion) {
-      const where = [...new Set(scheduled.map((p) => `${p.city}, ${p.region}`))].slice(0, 3).join(" / ");
-      warns.push(`${at}no scheduled course is in "${spec.input.region}" by city or state — plan covers ${where}`);
-    }
+  // A FAIL, and geographic. The lexical version this replaces was a warn with a
+  // known false positive; the argument for measuring it against an independent
+  // expected centre instead is above REGION_FIXTURES.
+  for (const h of checkRegionGeography(spec, itinerary, placeRows)) {
+    fails.push(`${at}${h}`);
   }
 
   const text = planProse(itinerary);
@@ -960,15 +1270,33 @@ async function callPlanner(jwt, input) {
   return { status: res.status, body, ms };
 }
 
-/** Fetch the DB rows behind the ids the plan returned (public read, anon key). */
+/**
+ * Fetch the DB rows behind the ids the plan returned (public read, anon key),
+ * WITH COORDINATES — checkRegionGeography needs them and they are not optional:
+ * a row that arrives without a location is reported as an un-runnable check
+ * rather than quietly passing.
+ *
+ * `location` is a geography column, which PostgREST renders as WKB hex under
+ * plain JSON and as real GeoJSON under `Accept: application/geo+json`. The
+ * feature's `properties` carry every other selected column, so this is the same
+ * row set as before plus a point.
+ */
 async function fetchPlaces(ids) {
   if (ids.length === 0) return [];
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/places?id=in.(${ids.join(",")})&select=id,slug,name,city,region,attrs`,
-    { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } },
+    `${SUPABASE_URL}/rest/v1/places?id=in.(${ids.join(",")})&select=id,slug,name,city,region,attrs,location`,
+    { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}`, Accept: "application/geo+json" } },
   );
   if (!res.ok) throw new Error(`places lookup failed: ${res.status} ${await res.text()}`);
-  return res.json();
+  const body = await res.json();
+  const feats = body?.features;
+  if (!Array.isArray(feats)) {
+    throw new Error("places lookup returned no GeoJSON features — the geographic region check cannot run");
+  }
+  return feats.map((f) => {
+    const c = f?.geometry?.coordinates ?? [];
+    return { ...(f?.properties ?? {}), lat: Number(c[1]), lng: Number(c[0]) };
+  });
 }
 
 /**
@@ -1033,6 +1361,14 @@ async function runSession(jwt, spec, planCall) {
     const why = `http ${first.status} error=${first.body?.error ?? "<none>"}`;
     console.log(`FAIL  ${why} (${first.ms}ms)`);
     return [{ id: label("create"), ms: first.ms, fails: [why], warns: [] }];
+  }
+  // No session's brief is meant to be impossible, so a decline here is a failure
+  // of the session, not a correct answer — and it is fatal to the chain either
+  // way, since a decline persists no trip to refine.
+  if (first.body.mode === "declined") {
+    const why = `create declined (${first.body.decline?.reason ?? "?"}): ${first.body.decline?.message ?? ""}`;
+    console.log(`FAIL  ${why} (${first.ms}ms)`);
+    return [{ id: label("create"), ms: first.ms, fails: [why], warns: [], courses: 0 }];
   }
 
   const tripId = first.body.id;
@@ -1288,6 +1624,29 @@ async function main() {
 
     if (expected) fails.push(`expected one of [${expected.join(", ")}] but the planner returned a plan`);
 
+    // --- a 200 that is a DECLINE, not a plan.
+    //
+    // Branched before every plan check below because none of them apply: a
+    // decline persists nothing (so `id` is null by design), schedules nothing (so
+    // there is no itinerary to validate), and is a correct answer rather than a
+    // degraded one. It is still a real model turn, so it is timed and counted
+    // like any other, and its own assertions are in validateDecline.
+    if (call.body?.mode === "declined") {
+      const verdict = validateDecline(spec, call.body);
+      console.log(
+        `${verdict.fails.length ? "FAIL" : "ok  "}  declined (${call.body.decline?.reason ?? "?"}` +
+          `${call.body.decline?.playableWindow ? `, plays ${call.body.decline.playableWindow.label}` : ", NO WINDOW"})` +
+          `, ${call.ms}ms` + (verdict.warns.length ? `  (${verdict.warns.length} warn)` : ""),
+      );
+      for (const f of verdict.fails) console.log(`        FAIL  ${f}`);
+      for (const w of verdict.warns) console.log(`        warn  ${w}`);
+      results.push({
+        id: spec.id, ms: call.ms, fails: verdict.fails, warns: verdict.warns,
+        courses: 0, outcome: "declined", guard: call.body.guard, usage: call.body.usage,
+      });
+      continue;
+    }
+
     // A create that returns no id did not persist. This is asserted explicitly
     // because the failure is otherwise INVISIBLE from out here: the function used
     // to return 200 with `id: null` when the INSERT failed, and every criterion
@@ -1310,6 +1669,11 @@ async function main() {
     const verdict = validatePlan(spec, itinerary, placeRows);
     fails = fails.concat(verdict.fails);
     warns = verdict.warns;
+
+    // A prompt that asserts the request is impossible must not be answered with a
+    // plan — that is the half of the assertion that keeps January golf in
+    // Wisconsin from quietly becoming acceptable again.
+    if (spec.expectDecline) fails.push(declineExpectedButPlanned(spec, itinerary, placeRows, ""));
 
     console.log(
       `${fails.length ? "FAIL" : "ok  "}  ${ids.length} courses, ${call.ms}ms` +
@@ -1371,6 +1735,10 @@ async function main() {
     console.log(`  of which refinement turns: ${refineFailed.length}/${refineRows.length} failing`);
   }
   console.log(`warnings       ${warned}`);
+  const declines = results.filter((r) => r.outcome === "declined");
+  if (declines.length) {
+    console.log(`declines       ${declines.length} correct refusal(s) with a playable window (${declines.map((r) => r.id).join(", ")})`);
+  }
   const nameHits = results.reduce((n, r) => n + (r.guard?.scrubbedName ?? 0), 0);
   console.log(
     `server guard   ${guardHits} ungrounded item(s) removed before the client saw them` +

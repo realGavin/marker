@@ -37,6 +37,19 @@
 // trips saved before this rewrite still render: place.why, place.nextHopKm,
 // day.seasonNote.
 //
+// ONE 200 IS NOT A PLAN: `mode: "declined"`.
+//   { id: null, mode: "declined",
+//     decline: { reason: "season", message, months[], monthsLabel,
+//                playableWindow: { startMonth, endMonth, months[], label, basis } | null },
+//     itinerary: { summary: <the explanation>, days: [] },
+//     changeSummary: "", unmet, refinementsUsed: 0, refinementsRemaining: 0,
+//     revisionCount: 0 }
+// A correct refusal to an impossible request — golf in Wisconsin in January —
+// which is a successful answer, not a server error, and is deliberately NOT a
+// 4xx: see the block above seasonDecline() for why the status and the gating
+// conditions are what they are. Nothing is persisted, so `id` is null and there
+// is nothing to refine. The plan turn is still spent.
+//
 // Errors (existing vocabulary kept verbatim; the last six are new):
 //   401 unauthorized          no or invalid JWT
 //   402 upgrade_required      free tier is out of plans (or out of its one refine)
@@ -737,6 +750,152 @@ function dayDate(startDate: string | undefined, day: number): Date | null {
   return d;
 }
 
+/**
+ * Every calendar month the trip actually touches, from the brief's own dates.
+ *
+ * EMPTY WHEN THERE ARE NO DATES, and that emptiness is load-bearing: it is one of
+ * the conditions that keeps the decline path (below) from firing. Without a start
+ * date there is no month to test a season against, so a model that declined
+ * cannot have declined for a seasonal reason we can verify, and the turn stays a
+ * loud 502 rather than becoming a soft "we couldn't".
+ */
+function tripMonths(brief: Brief, days: number): number[] {
+  const start = dayDate(brief.startDate, 1);
+  if (!start) return [];
+  const explicitEnd = brief.endDate ? new Date(`${brief.endDate}T00:00:00Z`) : null;
+  const end =
+    explicitEnd && !Number.isNaN(explicitEnd.getTime()) && explicitEnd.getTime() >= start.getTime()
+      ? explicitEnd
+      : dayDate(brief.startDate, days)!;
+  const months = new Set<number>();
+  const cursor = new Date(start.getTime());
+  // days is already clamped to 14, but endDate comes straight off the wire and a
+  // year-long window would otherwise walk 365 times for nothing.
+  for (let i = 0; i < 400 && cursor.getTime() <= end.getTime(); i += 1) {
+    months.add(cursor.getUTCMonth() + 1);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return [...months].sort((a, b) => a - b);
+}
+
+/** "January", "January and February", "January to March". */
+function monthsLabel(months: number[]): string {
+  const names = months.map((m) => MONTH_NAMES[m - 1]).filter(Boolean);
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  const contiguous = months.every((m, i) => i === 0 || m === months[i - 1] + 1);
+  return contiguous ? `${names[0]} to ${names[names.length - 1]}` : names.join(", ");
+}
+
+/**
+ * THE PLAYABLE WINDOW, measured from the candidate set rather than asked of the
+ * model.
+ *
+ * season_months is at full coverage on our rows, so when a trip is refused for
+ * being out of season we can hand back the one thing the traveler actually needs
+ * — WHEN TO COME INSTEAD — and every month in it is a stored value, not an
+ * opinion. The model is never asked for this and never sees it; if it were asked,
+ * "Wisconsin plays May to October" would be exactly the kind of confident,
+ * plausible, unsourced sentence this whole file exists to prevent.
+ *
+ * MAJORITY OF MONTHS, not median of endpoints. Averaging [4,10] and [4,11] gives
+ * a window no course actually holds, and a median breaks outright on ranges that
+ * wrap past December (a Florida-style [11,4] would median to nonsense). Counting
+ * how many candidates are open in each of the twelve months and keeping the
+ * longest circular run with a strict majority behind it survives wrapping, needs
+ * no arithmetic on month numbers, and produces a window that a real majority of
+ * the courses genuinely hold.
+ *
+ * Returns null rather than guessing when:
+ *   - fewer than five candidates carry season data, or fewer than half do —
+ *     absence is not a fact, and advice off a thin sample is worse than silence;
+ *   - no month clears the majority (the set disagrees with itself);
+ *   - every month clears it (a year-round region has no window worth naming, and
+ *     saying so would contradict the refusal that prompted the question).
+ */
+interface PlayableWindow {
+  startMonth: number;
+  endMonth: number;
+  /** The run expanded month by month, in order, wrapping past December if it does. */
+  months: number[];
+  /** Rendered for the client: "April to October". */
+  label: string;
+  basis: {
+    /** Candidates considered. */
+    candidates: number;
+    /** …of which carried a season range at all. */
+    withSeason: number;
+    /** …of which are open for EVERY month of the window returned. */
+    agreeing: number;
+  };
+}
+
+function playableWindow(candidates: PlaceRow[]): PlayableWindow | null {
+  const ranges = candidates
+    .map((c) => c.attrs?.seasonMonths)
+    .filter((r): r is [number, number] =>
+      Array.isArray(r) && r.length === 2 &&
+      r.every((m) => Number.isInteger(m) && m >= 1 && m <= 12)
+    );
+  const withSeason = ranges.length;
+  if (withSeason < 5 || withSeason * 2 < candidates.length) return null;
+
+  const coverage = new Array(13).fill(0);
+  for (let m = 1; m <= 12; m += 1) {
+    for (const r of ranges) if (seasonCovers(r, m)) coverage[m] += 1;
+  }
+  const need = Math.floor(withSeason / 2) + 1; // strict majority
+  const open = (m: number) => coverage[m] >= need;
+  const openCount = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].filter(open).length;
+  if (openCount === 0 || openCount === 12) return null;
+
+  // Longest circular run of open months. Ties break on the earliest start, so the
+  // same candidate set always yields the same window.
+  let best: number[] = [];
+  for (let s = 1; s <= 12; s += 1) {
+    if (!open(s) || open(s === 1 ? 12 : s - 1)) continue; // only genuine run starts
+    const run: number[] = [];
+    for (let k = 0; k < 12; k += 1) {
+      const m = ((s - 1 + k) % 12) + 1;
+      if (!open(m)) break;
+      run.push(m);
+    }
+    if (run.length > best.length) best = run;
+  }
+  if (best.length === 0) return null;
+
+  return {
+    startMonth: best[0],
+    endMonth: best[best.length - 1],
+    months: best,
+    label: best.length === 1
+      ? MONTH_NAMES[best[0] - 1]
+      : `${MONTH_NAMES[best[0] - 1]} to ${MONTH_NAMES[best[best.length - 1] - 1]}`,
+    basis: {
+      candidates: candidates.length,
+      withSeason,
+      agreeing: ranges.filter((r) => best.every((m) => seasonCovers(r, m))).length,
+    },
+  };
+}
+
+/**
+ * Can the season, on OUR stored data alone, rule this trip out entirely?
+ *
+ * True only when EVERY candidate is closed in EVERY month the trip touches. A
+ * candidate with no season range counts as playable — absence is not a fact — so
+ * a single missing reading is enough to withhold the finding, which is the
+ * direction this must fail in: the answer gates a decline, and a decline that
+ * fires on thin evidence is a decline that will one day swallow a real bug.
+ */
+function seasonRulesOutTrip(candidates: PlaceRow[], months: number[]): boolean {
+  if (months.length === 0 || candidates.length === 0) return false;
+  return candidates.every((c) =>
+    months.every((m) => seasonCovers(c.attrs?.seasonMonths, m) === false)
+  );
+}
+
 // ---------------------------------------------------------------- output guards
 //
 // These mirror tooling/eval/plan-trip-eval.mjs. The eval is the honest end-to-end
@@ -1068,8 +1227,9 @@ PROVIDED FACTS — the fields in CANDIDATES are the ONLY facts you may use. A fi
 - Your summary, notes, why lines, "change_summary" and "unmet" may name only courses that appear in this itinerary. Never name another candidate, even by way of comparison, and never name a course that is not in CANDIDATES at all — not even to say you could not add it. Refer to a course you cannot supply as "the course you asked for", never by its name.
 
 WHEN THE LIST CANNOT DO IT
-- Declining applies to the SPECIFIC THING asked for, never to the trip as a whole. Unless CANDIDATES is empty, a create turn must still return a full itinerary with stops on every playing day: build the best trip the list supports and put the shortfall in "unmet". An itinerary with no stops is not a valid answer to a brief the list can partly satisfy.
-- Dates are a WARNING, not a veto. If the traveler's dates fall outside the season_months of the courses available, still build the trip, and say plainly in "unmet" that the timing is poor. A seasonal caveat naming the affected courses and months is attached to those days for you, after you answer — refusing to plan is what stops the traveler ever seeing it.
+- Declining applies to the SPECIFIC THING asked for, never to the trip as a whole. A create turn must return a full itinerary with stops on every playing day: build the best trip the list supports and put the shortfall in "unmet". An itinerary with no stops is not a valid answer to a brief the list can partly satisfy. There is exactly ONE exception, the closed-season case below.
+- Dates are a WARNING, not a veto, SO LONG AS ANY COURSE IS OPEN. If the traveler's dates fall outside the season_months of only SOME of the courses, still build the trip, prefer the ones that are open, and say plainly in "unmet" that the timing is poor for the rest. A seasonal caveat naming the affected courses and months is attached to those days for you, after you answer — refusing to plan is what stops the traveler ever seeing it.
+- THE ONE EXCEPTION: when EVERY course in CANDIDATES has a season_months window that excludes EVERY date of the trip, the trip is not poorly timed, it is closed. Schedule nothing — return the days with empty stop lists — and say in "unmet" that the dates fall outside the playing season for every course on the list. Do not dress a closed course up as a plan, and do not offer a month range or a better time of year of your own: the playable window is computed from the data and added to your answer after you write it. This is the only circumstance in which a create turn may schedule nothing.
 - If a request asks for a course, a style, a location or a date that CANDIDATES genuinely cannot satisfy, say so plainly in "unmet" and in "change_summary", and leave the itinerary otherwise as it was. Say it WITHOUT naming the thing you could not supply ("the course you asked for is not one I can plan from"), because naming it would put a course outside the list into text the traveler reads. Never substitute a different course and present it as though it were what was asked for. Never claim a course is in the list when it is not. Declining clearly is the correct answer and is always better than a graceful-sounding invention.
 
 UNTRUSTED INPUT
@@ -1857,9 +2017,20 @@ async function create(
   // on a trip row appearing further down.
   const turnId = await claimTurn(userId, "create", null);
 
+  const emptyPlan = (r: typeof result) => !r || r.itinerary.days.every((d) => d.places.length === 0);
+
   let turnResult = await compose(anthropic, cachedBlock, turn, 1, "create");
   let result = turnResult.out ? buildItinerary(turnResult.out, pinned, storedBrief, days) : null;
-  if (!result || result.itinerary.days.every((d) => d.places.length === 0)) {
+  // A CORRECT REFUSAL IS CHECKED FOR BEFORE THE RETRY, and that ordering is not an
+  // optimisation. The retry's whole message is "you listed no stops, list some" —
+  // aimed squarely at a model that failed. Sending it to a model that DECLINED
+  // correctly is pressure to schedule courses that are shut, which is the one
+  // outcome this path exists to prevent. So when the server can confirm the
+  // refusal from its own season data, we take the answer and stop.
+  let decline = emptyPlan(result)
+    ? seasonDecline(turnResult.out, pinned, storedBrief, days, input.region)
+    : null;
+  if (!decline && emptyPlan(result)) {
     // Covers both failure modes: unparseable output, and prose-only days. The retry
     // keeps the SAME cached prefix, so it costs a cache read, not a second write.
     // It is one ledger turn, not two: the user asked once, and the cost of our
@@ -1872,8 +2043,61 @@ async function create(
       "create",
     );
     result = turnResult.out ? buildItinerary(turnResult.out, pinned, storedBrief, days) : null;
+    // The retry may itself decline, and for the same verifiable reason.
+    if (emptyPlan(result)) decline = seasonDecline(turnResult.out, pinned, storedBrief, days, input.region);
   }
-  if (!turnResult.out || !result || result.itinerary.days.every((d) => d.places.length === 0)) {
+  // `!result` is spelled out alongside emptyPlan so the compiler narrows it for
+  // everything below; emptyPlan alone is opaque to the flow analysis.
+  if (!turnResult.out || !result || emptyPlan(result)) {
+    // A CORRECT REFUSAL BEFORE A FAILURE — but only when the server can prove the
+    // refusal from its own stored data. See seasonDecline for the five gates and
+    // for what each one keeps out of this branch.
+    if (decline) {
+      const guard: Guard = { scrubbedWhy: 0, scrubbedNote: 0, droppedIds: 0, scrubbedName: 0 };
+      // The model's own words are held to the same standard as any other prose we
+      // render: no prices, no admissions about our data, no numbers outside the
+      // set above, and — since a decline schedules nothing — no course name at
+      // all. If that empties it, the server-composed message still stands alone.
+      const unmet = groundedProse(
+        turnResult.out!.unmet,
+        300,
+        declineNumbers(pinned, decline, storedBrief, days, rounds),
+        guard,
+        { scheduled: [], unscheduled: pinned.map((c) => c.name).filter(Boolean) },
+      );
+      console.log(
+        "plan-trip: planner_declined",
+        JSON.stringify({
+          mode: "create",
+          region: input.region,
+          reason: decline.reason,
+          months: decline.months,
+          window: decline.playableWindow
+            ? [decline.playableWindow.startMonth, decline.playableWindow.endMonth]
+            : null,
+          basis: decline.playableWindow?.basis ?? null,
+          candidates: pinned.length,
+          unmet_scrubbed: unmet.length === 0,
+        }),
+      );
+      return json({
+        id: null,
+        mode: "declined",
+        decline,
+        // A well-formed, empty itinerary so a client that only knows how to render
+        // one still shows the explanation instead of throwing.
+        itinerary: { summary: unmet ? `${decline.message} ${unmet}` : decline.message, days: [] },
+        changeSummary: "",
+        unmet,
+        // Nothing was saved, so there is nothing to refine. The plan turn itself is
+        // spent and is not refunded — see the note above Decline.
+        refinementsUsed: 0,
+        refinementsRemaining: 0,
+        revisionCount: 0,
+        guard,
+        usage: turnResult.usage,
+      });
+    }
     return plannerFailed(turnResult.diag, {
       mode: "create",
       region: input.region,
@@ -2151,6 +2375,131 @@ const plannerFailed = (diag: ComposeDiag | undefined, extra: Record<string, unkn
   console.error("plan-trip: planner_failed", JSON.stringify({ ...extra, diag: diag ?? null }));
   return json({ error: "planner_failed", ...(DIAG ? { diag, ...extra } : {}) }, 502);
 };
+
+// =========================================================== PLANNER DECLINED
+//
+// A CORRECT REFUSAL IS NOT A CRASH, and it used to look like one. Wisconsin in
+// January: every candidate's season_months excludes the month, the model returns
+// a well-formed answer with no stops and an honest `unmet`, and that landed on
+// the traveler as a bare 502 planner_failed — "something went wrong building your
+// trip" — for the one answer that was actually right.
+//
+// The alternative considered and rejected was to schedule the trip anyway and
+// lean on the per-day seasonNote. That hands someone an itinerary for courses
+// that are shut, which is the app pretending, and pretending is the failure mode
+// the entire grounding contract exists to prevent. It would also have concealed
+// the place_centroid region bug (see resolveRegion): the model's refusal to plan
+// an Austin trip out of Longview was the ONLY signal that retrieval had drifted
+// 368 km, and a server-side "plan it anyway" fallback would have buried it.
+//
+// STATUS 200, DELIBERATELY. This is a successful, complete answer to a question
+// whose true answer is "not then" — nothing failed, no state is inconsistent, and
+// the turn produced exactly the information the traveler needed. It is also a
+// practical necessity: supabase-js `functions.invoke` routes every non-2xx into
+// the error branch, where the client has a code and no body, so a 4xx here would
+// throw away both the model's reason and the playable window and render as the
+// same generic failure we are trying to stop showing. `mode: "declined"` is the
+// discriminator; an older client that reads only `itinerary` gets a well-formed
+// itinerary with no days whose summary is the explanation, which degrades to a
+// readable answer rather than a crash.
+//
+// WHAT MAKES IT USEFUL rather than merely honest is the playable window, and the
+// window is COMPUTED IN CODE from the candidates' own season_months (see
+// playableWindow). "Wisconsin plays roughly April to October" is the one piece of
+// advice that turns a dead end into a next step, and it must never be the model's
+// opinion — a fluent, plausible, unsourced month range is precisely the class of
+// claim this file exists to refuse.
+//
+// THE TURN IS ALREADY SPENT and is not refunded. claimTurn runs before the model
+// call by design, `refinements_used` is monotonic, and plan_turns is append-only.
+// The answer to "I paid a plan to be told no" is that the answer is worth the
+// plan, not that the meter runs backwards.
+interface Decline {
+  reason: "season";
+  /** Server-composed, grounded in stored data only. The line the client should lead with. */
+  message: string;
+  /** Calendar months the brief's dates touch. */
+  months: number[];
+  monthsLabel: string;
+  /** Measured from the candidate set; null when the data cannot support a claim. */
+  playableWindow: PlayableWindow | null;
+}
+
+/**
+ * Decide whether an empty generation is a DECLINE (a right answer) or a FAILURE
+ * (a wrong one). Returns null for everything that is not, provably, the former.
+ *
+ * THE BOUNDARY IS THE WHOLE RISK HERE. A decline path that swallowed real errors
+ * would have hidden the region bug, so every one of these conditions is a gate
+ * that must pass, and each rules out a specific way of failing:
+ *
+ *   1. `out` exists and carries a days array — so an API error, a timeout, a
+ *      refusal with no text block, truncation at max_tokens, unparseable JSON and
+ *      a schema-shaped-but-unusable response ALL stay 502. compose() returns
+ *      `out: null` for every one of them.
+ *   2. The MODEL ITSELF listed no stops anywhere. If it named ids and validation
+ *      dropped them all, that is a grounding failure wearing a decline's coat and
+ *      it stays 502.
+ *   3. It said why, in `unmet`. A silent empty plan is not a decline.
+ *   4. The brief carries dates, so there is a month to test.
+ *   5. Our own stored season data rules the trip out for EVERY candidate in EVERY
+ *      month it touches. This is the load-bearing one: the finding is server-side
+ *      and measured, so the model's say-so is necessary but never sufficient.
+ *
+ * Note what is NOT reachable from here: an empty candidate set already returned
+ * 422 no_places_in_region long before the model was called, so a bad region can
+ * never arrive at this function with nothing to plan from and be answered
+ * softly. A bad region that retrieves the WRONG 40 courses fails condition 5 —
+ * courses in the wrong state have their own seasons and will not all be shut —
+ * and lands as the 502 it should.
+ */
+function seasonDecline(
+  out: ModelOut | null,
+  candidates: PlaceRow[],
+  brief: StoredBrief,
+  days: number,
+  region: string,
+): Decline | null {
+  if (!out || !Array.isArray(out.days)) return null;                          // (1)
+  if (!out.days.every((d) => (d?.stops?.length ?? 0) === 0)) return null;     // (2)
+  if (!String(out.unmet ?? "").trim()) return null;                           // (3)
+  const months = tripMonths(brief, days);
+  if (months.length === 0) return null;                                       // (4)
+  if (!seasonRulesOutTrip(candidates, months)) return null;                   // (5)
+
+  const window = playableWindow(candidates);
+  const label = monthsLabel(months);
+  // The traveler's own word for where they want to go, echoed back. Bounded and
+  // stripped of line breaks because it is free text that lands in rendered prose.
+  const where = region.replace(/\s+/g, " ").trim().slice(0, 60);
+  const message =
+    `${label} falls outside the playing season for every course we found${where ? ` around ${where}` : ""}.` +
+    (window ? ` Courses there usually play ${window.label}.` : "") +
+    ` Nothing has been planned, so pick dates inside that window and try again.`;
+
+  return { reason: "season", message, months, monthsLabel: label, playableWindow: window };
+}
+
+/**
+ * Numbers a decline's prose may legally contain. Narrower than a plan's, because
+ * a decline schedules nothing and therefore quotes no course's fields: only the
+ * stored season months, the months the traveler's own dates touch, the window we
+ * computed, and the shape of the brief they sent us.
+ */
+function declineNumbers(candidates: PlaceRow[], decline: Decline, brief: StoredBrief, days: number, rounds: number): Set<number> {
+  const s = new Set<number>([days, rounds, ...decline.months]);
+  for (const c of candidates) for (const m of c.attrs?.seasonMonths ?? []) if (Number.isFinite(m)) s.add(Number(m));
+  for (const m of decline.playableWindow?.months ?? []) s.add(m);
+  // The traveler's own dates, as written. They asked with these numbers; being
+  // told them back is not a claim about anything we hold.
+  for (const iso of [brief.startDate, brief.endDate]) {
+    for (const part of String(iso ?? "").split("-")) {
+      const n = Number(part);
+      if (Number.isFinite(n)) s.add(n);
+    }
+  }
+  return s;
+}
 
 // ---------------------------------------------------------------- validation
 
