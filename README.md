@@ -1,8 +1,8 @@
-# Marker
+# Marker: Golf
 
-**A "Letterboxd for golf courses."** You can map every course in the US, log the ones you've played, build bucket lists, and plan golf trips with an AI planner that can only recommend courses that actually exist.
+**A "Letterboxd for golf courses."** Explore and map every course in the US, log where you’ve played, build bucket lists, and plan golf trips with a grounded AI planner.
 
-I built Marker solo in about five weeks (July–August 2026), from an empty folder to a TestFlight build, across eight milestones. The engine doesn't know anything about golf, and golf is simply the first "skin" on it.
+Marker is built as a domain-agnostic engine + skin: the engine owns reusable product behavior, including maps, discovery, lists, profiles, planning, and data interfaces, while the skin (in this case, golf) supplies the domain-specific vocabulary, attributes, theme, and data.
 
 <p align="center">
   <img src="docs/store-screenshots/final/01-map.png" width="19%" />
@@ -17,7 +17,7 @@ I built Marker solo in about five weeks (July–August 2026), from an empty fold
 | | |
 |---|---|
 | **12,640 US courses** | Built with my own ETL (OpenStreetMap + Overture, enriched with Wikidata, elevation, wind, season and USGS aerials). It matched a hand-labelled ground-truth set 50/50. |
-| **Grounded AI trip planner** | Retrieval happens first and validation happens after, so the model can *choose* courses but can never *invent* one. An end-to-end eval runs against the deployed function and passes 48/48, with zero non-database courses, zero price claims, and every turn of a multi-turn refinement re-validated. |
+| **AI trip planner** | Retrieval happens first and validation happens after, so the model can *choose* courses but can not *invent*. An end-to-end eval runs against the deployed function and passes 48/48, with zero non-database courses, zero price claims, and every turn of a multi-turn refinement re-validated. |
 | **Flat infrastructure cost** | No metered map or places APIs. The basemap is a single PMTiles file on Cloudflare R2, pins are clustered on the device, and descriptions and embeddings are batch-precomputed once. The only per-user AI call is gated behind the subscription. |
 | **Security by construction** | Every user table uses Postgres row-level security, backed by SQL isolation tests. Entitlements are written only by the server-side RevenueCat webhook. There is also a community e2e suite that passes 23/23 against production with two real accounts. |
 | **Engine / skin separation** | The engine code is forbidden from using golf vocabulary, and a purity lint in `pnpm verify` enforces the rule. Adding a new niche (ski resorts, surf breaks, national parks) means writing a new skin package and an ETL adapter. |
@@ -57,7 +57,7 @@ docs/                architecture, decision records, data-quality + eval reports
 
 ## How it was built
 
-I built this as a solo, AI-native developer. I wrote the architecture plan and the decision records myself, then directed a small team of Claude sub-agents (mobile, backend, data, AI, release-ops and a reviewer; see [`.claude/agents`](.claude/agents)) against them, using security reviews and evals as the gates between milestones. The commit history is written to be read. Messages explain *why* a change was made, including cases where an earlier fix didn't work.
+I wrote the architecture plan and the decision records, then directed a small team of Claude sub-agents (mobile, backend, data, AI, release-ops and a reviewer; see [`.claude/agents`](.claude/agents)) against them, using security reviews and evals as the gates between milestones. The commit history is written to be read. Messages explain *why* a change was made, including cases where an earlier fix didn't work.
 
 ## Running it
 
