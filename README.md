@@ -1,33 +1,68 @@
 # Marker
 
-"Letterboxd for golf courses" — map + log + bucket lists + grounded AI trip planner.
-Golf is skin #1 of a niche-agnostic engine. Full design: [docs/architecture.md](docs/architecture.md). Working rules: [CLAUDE.md](CLAUDE.md).
+**A "Letterboxd for golf courses."** You can map every course in the US, log the ones you've played, build bucket lists, and plan golf trips with an AI planner that can only recommend courses that actually exist.
 
-## One-time setup (Gavin)
+I built Marker solo in about five weeks (July–August 2026), from an empty folder to a TestFlight build, across eight milestones. The engine doesn't know anything about golf, and golf is simply the first "skin" on it.
 
-1. **Xcode** — install the full app from the Mac App Store (needed for the iOS simulator), then:
+<p align="center">
+  <img src="docs/store-screenshots/final/01-map.png" width="19%" />
+  <img src="docs/store-screenshots/final/03-course.png" width="19%" />
+  <img src="docs/store-screenshots/final/05-itinerary.png" width="19%" />
+  <img src="docs/store-screenshots/final/06-lists.png" width="19%" />
+  <img src="docs/store-screenshots/final/04-profile.png" width="19%" />
+</p>
 
-   ```bash
-   sudo xcode-select -s /Applications/Xcode.app && sudo xcodebuild -runFirstLaunch
-   ```
+## Highlights
 
-2. **Apple Developer Program** ($99/yr, can take days — start early): https://developer.apple.com/programs/enroll/
-3. **Supabase** — create a free project at https://supabase.com, then copy `apps/mobile/.env.example` to `apps/mobile/.env` and fill in the URL + anon key from Project Settings → API. Never commit `.env`; never put service-role keys in it.
-4. Later milestones: Cloudflare (R2), RevenueCat, Anthropic API key — not needed until M2/M6/M4.
+| | |
+|---|---|
+| **12,640 US courses** | Built with my own ETL (OpenStreetMap + Overture, enriched with Wikidata, elevation, wind, season and USGS aerials). It matched a hand-labelled ground-truth set 50/50. |
+| **Grounded AI trip planner** | Retrieval happens first and validation happens after, so the model can *choose* courses but can never *invent* one. An end-to-end eval runs against the deployed function and passes 48/48, with zero non-database courses, zero price claims, and every turn of a multi-turn refinement re-validated. |
+| **Flat infrastructure cost** | No metered map or places APIs. The basemap is a single PMTiles file on Cloudflare R2, pins are clustered on the device, and descriptions and embeddings are batch-precomputed once. The only per-user AI call is gated behind the subscription. |
+| **Security by construction** | Every user table uses Postgres row-level security, backed by SQL isolation tests. Entitlements are written only by the server-side RevenueCat webhook. There is also a community e2e suite that passes 23/23 against production with two real accounts. |
+| **Engine / skin separation** | The engine code is forbidden from using golf vocabulary, and a purity lint in `pnpm verify` enforces the rule. Adding a new niche (ski resorts, surf breaks, national parks) means writing a new skin package and an ETL adapter. |
 
-## Daily commands
+## How the planner can't hallucinate
 
-```bash
-pnpm install        # after any dependency change
-pnpm verify         # typecheck everything + engine-purity lint
-cd apps/mobile && pnpm start   # Metro dev server
-cd apps/mobile && pnpm ios     # build + run on iOS simulator (needs Xcode)
+```
+free-text brief ──► parse (LLM, strict JSON schema)
+                ──► retrieve 15–40 real candidates (PostGIS + pgvector, our code, not the LLM)
+                ──► compose itinerary from candidate IDs only (LLM)
+                ──► validate: unknown IDs dropped, untraceable numbers rejected,
+                    region checked against an independent geographic fixture
+                ──► render from database IDs, never from model prose
 ```
 
-## Layout
+When a request is impossible (for example, dates that fall outside the region's playing season), the planner declines honestly. It tells the user the reason and suggests a playable window instead of returning a plan that would be wrong. For the full reasoning, see [`docs/architecture.md`](docs/architecture.md#33-how-the-trip-planner-cannot-hallucinate) and the eval harness in [`tooling/eval/plan-trip-eval.mjs`](tooling/eval/plan-trip-eval.mjs).
 
-- `apps/mobile` — the engine app (Expo). No niche vocabulary allowed (lint-enforced).
-- `packages/core` — skin contract + domain types.
-- `packages/skins/golf` — the golf skin: vocabulary, theme, attribute schema, curated lists.
-- `tooling/etl` — course data pipeline (M1).
-- `supabase/` — SQL migrations + RLS isolation tests.
+## Stack
+
+**App:** Expo (React Native) · TypeScript · expo-router · MapLibre
+**Backend:** Supabase (Postgres, PostGIS, pgvector, Auth, Edge Functions) · Cloudflare Workers + R2
+**AI:** Claude (Haiku for the planner, Batch API for grounded descriptions) · local embeddings
+**Monetization:** RevenueCat · **Tooling:** pnpm workspaces · EAS Build
+
+## Repository layout
+
+```
+apps/mobile          the engine app (Expo), niche-agnostic and lint-enforced
+packages/core        skin contract + domain types
+packages/skins/golf  vocabulary, theme, attribute schema, curated lists
+tooling/etl          course data pipeline: extract → transform → enrich → load
+tooling/eval         end-to-end grounding + community evals
+supabase/            17 migrations, RLS isolation tests, edge functions
+infra/tile-worker    edge-cached tile/photo/privacy worker
+docs/                architecture, decision records, data-quality + eval reports
+```
+
+## How it was built
+
+I built this as a solo, AI-native developer. I wrote the architecture plan and the decision records myself, then directed a small team of Claude sub-agents (mobile, backend, data, AI, release-ops and a reviewer; see [`.claude/agents`](.claude/agents)) against them, using security reviews and evals as the gates between milestones. The commit history is written to be read. Messages explain *why* a change was made, including cases where an earlier fix didn't work.
+
+## Running it
+
+See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+## Data attribution
+
+Course data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (ODbL) and the [Overture Maps Foundation](https://overturemaps.org/). Aerial imagery comes from USGS NAIP (public domain). Additional facts come from [Wikidata](https://www.wikidata.org/) (CC0).
