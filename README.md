@@ -17,7 +17,7 @@ Marker is built as a domain-agnostic engine + skin: the engine owns reusable pro
 | | |
 |---|---|
 | **12,640 US courses** | Built with my own ETL (OpenStreetMap + Overture, enriched with Wikidata, elevation, wind, season and USGS aerials). It matched a hand-labelled ground-truth set 50/50. |
-| **AI trip planner** | Retrieval happens first and validation happens after. An end-to-end eval runs against the deployed function and passes 48/48, with zero non-database courses, zero price claims, and every turn of a multi-turn refinement re-validated. |
+| **AI trip planner** | Type a brief like "long weekend near Monterey, links-style, one bucket-list course" and get a day-by-day itinerary you can refine. Out-of-season dates get a reason and a playable window. An end-to-end eval against the deployed function passes 48/48. |
 | **Flat infrastructure cost** | No metered map or places APIs. The basemap is a single PMTiles file on Cloudflare R2, pins are clustered on the device, and descriptions and embeddings are batch-precomputed once. The only per-user AI call is gated behind the subscription. |
 | **Security by construction** | Every user table uses Postgres row-level security, backed by SQL isolation tests. Entitlements are written only by the server-side RevenueCat webhook. There is also a community e2e suite that passes 23/23 against production with two accounts. |
 | **Engine / skin separation** | The engine code is forbidden from using golf vocabulary, and a purity lint in `pnpm verify` enforces the rule. Adding a new niche (ski resorts, surf breaks, national parks) means writing a new skin package and an ETL adapter. |
