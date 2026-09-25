@@ -17,16 +17,16 @@ Marker is built as a domain-agnostic engine + skin: the engine owns reusable pro
 | | |
 |---|---|
 | **12,640 US courses** | Built with my own ETL (OpenStreetMap + Overture, enriched with Wikidata, elevation, wind, season and USGS aerials). It matched a hand-labelled ground-truth set 50/50. |
-| **AI trip planner** | Retrieval happens first and validation happens after, so the model can *choose* courses but cannot *invent* one. An end-to-end eval runs against the deployed function and passes 48/48, with zero non-database courses, zero price claims, and every turn of a multi-turn refinement re-validated. |
+| **AI trip planner** | Retrieval happens first and validation happens after. An end-to-end eval runs against the deployed function and passes 48/48, with zero non-database courses, zero price claims, and every turn of a multi-turn refinement re-validated. |
 | **Flat infrastructure cost** | No metered map or places APIs. The basemap is a single PMTiles file on Cloudflare R2, pins are clustered on the device, and descriptions and embeddings are batch-precomputed once. The only per-user AI call is gated behind the subscription. |
-| **Security by construction** | Every user table uses Postgres row-level security, backed by SQL isolation tests. Entitlements are written only by the server-side RevenueCat webhook. There is also a community e2e suite that passes 23/23 against production with two real accounts. |
+| **Security by construction** | Every user table uses Postgres row-level security, backed by SQL isolation tests. Entitlements are written only by the server-side RevenueCat webhook. There is also a community e2e suite that passes 23/23 against production with two accounts. |
 | **Engine / skin separation** | The engine code is forbidden from using golf vocabulary, and a purity lint in `pnpm verify` enforces the rule. Adding a new niche (ski resorts, surf breaks, national parks) means writing a new skin package and an ETL adapter. |
 
 ## How the planner can't hallucinate
 
 ```
 free-text brief ──► parse (LLM, strict JSON schema)
-                ──► retrieve 15–40 real candidates (PostGIS + pgvector, our code, not the LLM)
+                ──► retrieve 15–40 candidates (PostGIS + pgvector, our code, not the LLM)
                 ──► compose itinerary from candidate IDs only (LLM)
                 ──► validate: unknown IDs dropped, untraceable numbers rejected,
                     region checked against an independent geographic fixture
