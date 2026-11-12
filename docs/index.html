@@ -439,11 +439,16 @@
   var PROJ = {
     conus: { fn: albers(-96, 37.5, 29.5, 45.5), rect: [0.000, 0.000, 1.000, 0.605] },
     AK:    { fn: albers(-152, 60, 55, 65),      rect: [0.005, 0.395, 0.165, 0.565] },
-    HI:    { fn: albers(-157, 20, 8, 18),       rect: [0.185, 0.462, 0.310, 0.565] }
+    // Hawaii gets a box out of proportion to Alaska's on purpose. The chain
+    // spans 5 degrees of longitude but the islands themselves are specks, so
+    // fitting that span into a small rect leaves each island smaller than the
+    // course dots sitting on it. Insets are already not to scale with each
+    // other; this one is sized to be legible rather than to be fair.
+    HI:    { fn: albers(-157, 20, 8, 18),       rect: [0.180, 0.420, 0.355, 0.565] }
   };
   // Inset labels: 22 Alaskan and 80 Hawaiian courses are a sparse scatter, and
   // unlabelled they read as stray marks rather than as two more states.
-  var INSET_LABELS = [["AK", 0.005], ["HI", 0.185]];
+  var INSET_LABELS = [["AK", 0.005], ["HI", 0.180]];
 
   /* The Aleutians cross the antimeridian, so Alaskan longitudes east of zero
      have to be read as west of -180 or the state spans the globe. The basemap
