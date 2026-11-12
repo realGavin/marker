@@ -5,7 +5,7 @@
 <title>Marker</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description" content="A Letterboxd for golf courses: 12,640 US courses on one map, a play log, bucket lists, and an AI trip planner that cannot invent a course.">
+<meta name="description" content="Golf course explorer and trip planner for iOS. 12,640 US courses on one map, with a play log, ratings, bucket lists and AI trip planning.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
@@ -196,11 +196,11 @@
       <span class="label">Solo build</span>
     </div>
     <h1>Marker</h1>
-    <p class="tag">A Letterboxd for golf courses.</p>
+    <p class="tag">Golf course explorer and trip planner.</p>
     <p class="lede">
       Every golf course in the United States on one map — <em>12,640</em> of them. Log the ones
-      you've played, rate them, chase bucket lists, and plan a trip with an AI planner that is
-      structurally incapable of inventing a course that doesn't exist.
+      you've played, rate them, keep bucket lists, and plan a golf trip in one place instead of
+      across twenty tabs.
     </p>
     <div class="cta">
       <a class="btn" href="engineering.html">How it's built</a>
@@ -323,9 +323,8 @@
       <div class="feature">
         <span class="label n">04</span>
         <h3>Trips, planned with friends</h3>
-        <p>Day-by-day itineraries built only from courses that exist in the directory. Invite
-          friends with a code; everyone sees and edits the same plan, with tee-time reminders
-          24 hours and 4 hours out.</p>
+        <p>Day-by-day itineraries you can plan together. Invite friends with a code; everyone
+          sees and edits the same plan, with tee-time reminders 24 hours and 4 hours out.</p>
       </div>
       <div class="feature">
         <span class="label n">05</span>
@@ -341,18 +340,18 @@
 <section>
   <div class="wrap sec">
     <div class="sec-head">
-      <h2>Why the planner can't lie</h2>
+      <h2>How the trip planner works</h2>
       <span class="label">Retrieve first, validate after</span>
     </div>
     <div class="teaser">
       <div class="prose">
-        <p>The trip planner is the only live AI call in the product, and the whole design exists to
-          make one failure impossible: a course that doesn't exist, or a fact that was never
-          measured, appearing in a plan.</p>
+        <p>Describe a trip the way you'd say it out loud — five days in Scottsdale in March, four
+          rounds, mid budget, prefer walkable — and get back a day-by-day itinerary with real
+          courses, real driving distances between them, and a reason for each pick.</p>
         <p>The model never supplies facts. Our code retrieves real rows from the database first;
           the model may only <strong>choose among them by ID</strong>; the server then discards any
           ID it did not itself supply. The client renders from validated IDs, never from the
-          model's prose — so a fabricated course has nowhere to appear.</p>
+          model's prose.</p>
         <p>An end-to-end eval runs the whole thing against the deployed function on every change.
           Twice during development it caught a defect that every other check had passed, which is
           the part of the build worth reading about.</p>
