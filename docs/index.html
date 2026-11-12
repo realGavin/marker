@@ -259,9 +259,9 @@
       </div>
     </div>
     <p class="demo-note">
-      No basemap, no tile server, no geocoding call. Every dot is a real course from the same
-      dataset the app bundles, projected and filtered in the browser — which is exactly how the
-      phone does it. The country draws itself out of the courses.
+      No tile server, no geocoding call, nothing metered. The state outlines are one 111 KB
+      static file and every dot is a real course from the same dataset the app bundles, both
+      projected and filtered in the browser — which is exactly how the phone does it.
     </p>
   </div>
 </section>
@@ -375,7 +375,8 @@
     <p class="attrib">
       Course data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors
       (ODbL) and the <a href="https://overturemaps.org/">Overture Maps Foundation</a>. Aerial imagery
-      from USGS NAIP (public domain). Additional facts from
+      from USGS NAIP and state outlines from US Census Bureau cartographic boundary
+      files (both public domain). Additional facts from
       <a href="https://www.wikidata.org/">Wikidata</a> (CC0).
     </p>
     <p><span class="label">Gavin Zeng</span> &nbsp;·&nbsp; <a href="https://github.com/realGavin/marker">github.com/realGavin/marker</a></p>
@@ -407,8 +408,11 @@
   var bit = {};         // tag -> bitmask
   var active = 0;       // OR within a group, AND across groups -> stored as array of masks
   var groupMasks = [0, 0, 0];
-  var pts = null;       // Float32Array of x,y in [0,1] plot space
+  var pts = null;       // Float32Array of x,y in layout space
   var shown = null;     // Uint8Array flags
+  var bm = null;        // { groups: { conus|AK|HI: { arcs, polys, outer, inner } } }
+  var bmXY = null;      // same arcs, projected into layout space
+  var FIT = {};         // per group: the transform both outlines and dots use
   var dpr = 1, W = 0, H = 0;
 
   /* ---- Albers equal-area conic. The US is three of these: the lower 48 and
@@ -435,42 +439,121 @@
   var PROJ = {
     conus: { fn: albers(-96, 37.5, 29.5, 45.5), rect: [0.000, 0.000, 1.000, 0.605] },
     AK:    { fn: albers(-152, 60, 55, 65),      rect: [0.005, 0.395, 0.165, 0.565] },
-    HI:    { fn: albers(-157, 20, 8, 18),       rect: [0.195, 0.490, 0.295, 0.565] }
+    // Hawaii gets a box out of proportion to Alaska's on purpose. The chain
+    // spans 5 degrees of longitude but the islands themselves are specks, so
+    // fitting that span into a small rect leaves each island smaller than the
+    // course dots sitting on it. Insets are already not to scale with each
+    // other; this one is sized to be legible rather than to be fair.
+    HI:    { fn: albers(-157, 20, 8, 18),       rect: [0.180, 0.420, 0.355, 0.565] }
   };
   // Inset labels: 22 Alaskan and 80 Hawaiian courses are a sparse scatter, and
   // unlabelled they read as stray marks rather than as two more states.
-  var INSET_LABELS = [["AK", 0.005], ["HI", 0.195]];
+  var INSET_LABELS = [["AK", 0.005], ["HI", 0.180]];
+
+  /* The Aleutians cross the antimeridian, so Alaskan longitudes east of zero
+     have to be read as west of -180 or the state spans the globe. The basemap
+     file is built with the same shift. */
+  function lonOf(key, lon) { return key === "AK" && lon > 0 ? lon - 360 : lon; }
+  function groupOf(st) { return st === "AK" || st === "HI" ? st : "conus"; }
+
+  /* Fit each group's projected extent into its rect, preserving aspect, and
+     keep the transform so dots and outlines go through exactly the same one.
+     The extent comes from the state outlines when they loaded: geography
+     should decide where the map sits, not wherever the courses happen to
+     stop. Falling back to the dots' own extent keeps the map honest if the
+     outline file is missing — it just draws a slightly tighter country. */
+  function fitGroup(key, xs, ys) {
+    var p = PROJ[key], i;
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (i = 0; i < xs.length; i++) {
+      if (xs[i] < minX) minX = xs[i];
+      if (xs[i] > maxX) maxX = xs[i];
+      if (ys[i] < minY) minY = ys[i];
+      if (ys[i] > maxY) maxY = ys[i];
+    }
+    var bw = p.rect[2] - p.rect[0], bh = p.rect[3] - p.rect[1];
+    var sw = (maxX - minX) || 1e-9, sh = (maxY - minY) || 1e-9;
+    var sc = Math.min(bw / sw, bh / sh);
+    return {
+      minX: minX, maxY: maxY, sc: sc,
+      ox: p.rect[0] + (bw - sw * sc) / 2,
+      oy: p.rect[1] + (bh - sh * sc) / 2
+    };
+  }
+  // Albers y grows northward and canvas y grows downward, so the flip lives
+  // here, at the one place every coordinate passes through.
+  function layX(f, x) { return f.ox + (x - f.minX) * f.sc; }
+  function layY(f, y) { return f.oy + (f.maxY - y) * f.sc; }
 
   function project() {
-    var i, n = data.n.length, key, g;
+    var i, j, n = data.n.length, key;
     var groups = { conus: [], AK: [], HI: [] };
-    for (i = 0; i < n; i++) {
-      key = (data.s[i] === "AK" || data.s[i] === "HI") ? data.s[i] : "conus";
-      groups[key].push(i);
+    for (i = 0; i < n; i++) groups[groupOf(data.s[i])].push(i);
+
+    // Projected (not yet fitted) coordinates for everything that needs them.
+    var dotXY = {}, arcXY = {};
+    for (key in groups) {
+      var p = PROJ[key], g = groups[key];
+      var dx = new Float64Array(g.length), dy = new Float64Array(g.length);
+      for (i = 0; i < g.length; i++) {
+        var xy = p.fn(lonOf(key, data.lng[g[i]]), data.lat[g[i]]);
+        dx[i] = xy[0]; dy[i] = xy[1];
+      }
+      dotXY[key] = { x: dx, y: dy };
+
+      if (bm && bm.groups[key]) {
+        arcXY[key] = bm.groups[key].arcs.map(function (a) {
+          var out = new Float64Array(a.length);
+          for (j = 0; j < a.length; j += 2) {
+            var q = p.fn(a[j], a[j + 1]);
+            out[j] = q[0]; out[j + 1] = q[1];
+          }
+          return out;
+        });
+      }
     }
+
+    // One transform per group, from the outlines where we have them.
+    for (key in groups) {
+      var src = arcXY[key];
+      if (src && src.length) {
+        var ax = [], ay = [];
+        for (i = 0; i < src.length; i++) {
+          for (j = 0; j < src[i].length; j += 2) { ax.push(src[i][j]); ay.push(src[i][j + 1]); }
+        }
+        FIT[key] = fitGroup(key, ax, ay);
+      } else if (dotXY[key].x.length) {
+        FIT[key] = fitGroup(key, dotXY[key].x, dotXY[key].y);
+      } else {
+        FIT[key] = null;
+      }
+    }
+
     pts = new Float32Array(n * 2);
     for (key in groups) {
-      g = groups[key];
-      if (!g.length) continue;
-      var p = PROJ[key], xs = new Float64Array(g.length), ys = new Float64Array(g.length);
-      var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (i = 0; i < g.length; i++) {
-        var xy = p.fn(data.lng[g[i]], data.lat[g[i]]);
-        xs[i] = xy[0]; ys[i] = xy[1];
-        if (xy[0] < minX) minX = xy[0];
-        if (xy[0] > maxX) maxX = xy[0];
-        if (xy[1] < minY) minY = xy[1];
-        if (xy[1] > maxY) maxY = xy[1];
+      var f = FIT[key];
+      if (!f) continue;
+      var gi = groups[key], d = dotXY[key];
+      for (i = 0; i < gi.length; i++) {
+        pts[gi[i] * 2] = layX(f, d.x[i]);
+        pts[gi[i] * 2 + 1] = layY(f, d.y[i]);
       }
-      var bw = p.rect[2] - p.rect[0], bh = p.rect[3] - p.rect[1];
-      var sw = (maxX - minX) || 1e-9, sh = (maxY - minY) || 1e-9;
-      var sc = Math.min(bw / sw, bh / sh);
-      var ox = p.rect[0] + (bw - sw * sc) / 2, oy = p.rect[1] + (bh - sh * sc) / 2;
-      for (i = 0; i < g.length; i++) {
-        pts[g[i] * 2] = ox + (xs[i] - minX) * sc;
-        // Albers y grows northward and canvas y grows downward, so flip here
-        // rather than anywhere further along, where it would be invisible.
-        pts[g[i] * 2 + 1] = oy + (maxY - ys[i]) * sc;
+    }
+
+    bmXY = null;
+    if (bm) {
+      bmXY = {};
+      for (key in arcXY) {
+        var ff = FIT[key];
+        if (!ff || !arcXY[key]) continue;
+        bmXY[key] = arcXY[key].map(function (a) {
+          var out = new Float32Array(a.length);
+          for (j = 0; j < a.length; j += 2) {
+            out[j] = layX(ff, a[j]);
+            out[j + 1] = layY(ff, a[j + 1]);
+          }
+          return out;
+        });
       }
     }
   }
@@ -481,7 +564,10 @@
       ink: cs.getPropertyValue("--ink").trim() || "#191c1a",
       accent: cs.getPropertyValue("--accent").trim() || "#8a6a1f",
       muted: cs.getPropertyValue("--muted").trim() || "#5f6562",
-      ghost: cs.getPropertyValue("--ghost").trim() || "rgba(0,0,0,.12)"
+      ghost: cs.getPropertyValue("--ghost").trim() || "rgba(0,0,0,.12)",
+      land: cs.getPropertyValue("--map-land").trim() || "#232724",
+      border: cs.getPropertyValue("--map-line").trim() || "#3b423c",
+      coast: cs.getPropertyValue("--map-coast").trim() || "#596158"
     };
   }
 
@@ -514,11 +600,79 @@
   function plotX(u) { return view.ox + u * view.sc; }
   function plotY(v) { return view.oy + v * view.sc; }
 
+  /* Walk a ring's signed arc references into the current path. TopoJSON stores
+     a shared border once; a negative index means that arc traversed backwards.
+     Consecutive arcs share an endpoint, so every arc after the first skips its
+     own first point rather than drawing a zero-length step.
+
+     Arcs are stored in layout space, the same [0,1]-ish frame as pts, so they
+     go through plotX/plotY here for the same reason the dots do: the layout is
+     computed once and the canvas fit changes on every resize. */
+  function traceRing(key, ring) {
+    var arcs = bmXY[key], started = false, k, idx, a, j;
+    for (k = 0; k < ring.length; k++) {
+      idx = ring[k];
+      a = arcs[idx < 0 ? ~idx : idx];
+      if (!a) continue;
+      if (idx < 0) {
+        for (j = a.length - 2; j >= 0; j -= 2) {
+          if (!started) { ctx.moveTo(plotX(a[j]), plotY(a[j + 1])); started = true; }
+          else if (j !== a.length - 2) ctx.lineTo(plotX(a[j]), plotY(a[j + 1]));
+        }
+      } else {
+        for (j = 0; j < a.length; j += 2) {
+          if (!started) { ctx.moveTo(plotX(a[j]), plotY(a[j + 1])); started = true; }
+          else if (j !== 0) ctx.lineTo(plotX(a[j]), plotY(a[j + 1]));
+        }
+      }
+    }
+    if (started) ctx.closePath();
+  }
+
+  function strokeArcs(key, list) {
+    var arcs = bmXY[key], i, j, a;
+    ctx.beginPath();
+    for (i = 0; i < list.length; i++) {
+      a = arcs[list[i]];
+      if (!a || a.length < 4) continue;
+      ctx.moveTo(plotX(a[0]), plotY(a[1]));
+      for (j = 2; j < a.length; j += 2) ctx.lineTo(plotX(a[j]), plotY(a[j + 1]));
+    }
+    ctx.stroke();
+  }
+
+  function drawBasemap(t) {
+    if (!bmXY) return;
+    var key, g, i;
+    ctx.lineJoin = "round";
+    for (key in bmXY) {
+      g = bm.groups[key];
+
+      // Land first. evenodd rather than nonzero so enclaves and the Great
+      // Lakes punch through regardless of which way their rings wind.
+      ctx.beginPath();
+      for (i = 0; i < g.polys.length; i++) {
+        for (var r = 0; r < g.polys[i].length; r++) traceRing(key, g.polys[i][r]);
+      }
+      ctx.fillStyle = t.land;
+      ctx.fill("evenodd");
+
+      // State lines sit under the coastline, which carries the silhouette.
+      ctx.lineWidth = 0.7;
+      ctx.strokeStyle = t.border;
+      strokeArcs(key, g.inner);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = t.coast;
+      strokeArcs(key, g.outer);
+    }
+  }
+
   function draw() {
     if (!pts) return;
     var t = tokens(), i, n = data.n.length;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
+    drawBasemap(t);
     // Circles read lighter than squares of the same half-width (pi r^2 vs 4 r^2),
     // so the radius is bumped to keep the country at the same visual weight.
     var r = W > 620 ? 1.7 : 1.25;
@@ -642,9 +796,21 @@
     }
   }
 
-  fetch("demo-pins.json")
-    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(boot)
+  function getJSON(url) {
+    return fetch(url).then(function (r) {
+      if (!r.ok) throw new Error(url + " " + r.status);
+      return r.json();
+    });
+  }
+
+  // The outlines are decoration; the courses are the point. A failed basemap
+  // resolves to null and the map draws as it did before, rather than taking
+  // the whole demo down with it.
+  Promise.all([
+    getJSON("demo-pins.json"),
+    getJSON("demo-states.json").catch(function () { return null; })
+  ])
+    .then(function (res) { bm = res[1]; boot(res[0]); })
     .catch(function () {
       roName.textContent = "Course data unavailable";
       countEl.textContent = "12,640";

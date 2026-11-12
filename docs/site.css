@@ -12,6 +12,13 @@
   --muted: #5f6562;
   --line: #d8d5cd;
   --line-strong: #bdb9ae;
+  /* demo map: land, state lines and coastline. Separate from the UI line
+     tokens because the map needs more separation from its background than a
+     table rule does — at hairline weights on a dense scatter, the UI values
+     disappear under the dots. */
+  --map-land: #e6e2d7;
+  --map-line: #c7c1b2;
+  --map-coast: #a39b89;
   --accent: #8a6a1f;        /* brass, as on the screenshot captions */
   --accent-bright: #a98127;
   --green: #2f5d3f;         /* fairway, for secondary data marks */
@@ -35,6 +42,9 @@
     --muted: #9ba29d;
     --line: #272b28;
     --line-strong: #3a403c;
+    --map-land: #232724;
+    --map-line: #3b423c;
+    --map-coast: #596158;
     --accent: #d8b05c;
     --accent-bright: #e8c577;
     --green: #7fb08c;
@@ -50,6 +60,9 @@
   --muted: #9ba29d;
   --line: #272b28;
   --line-strong: #3a403c;
+  --map-land: #232724;
+  --map-line: #3b423c;
+  --map-coast: #596158;
   --accent: #d8b05c;
   --accent-bright: #e8c577;
   --green: #7fb08c;
