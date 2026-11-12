@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Marker Engineering</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="How Marker was built: a grounding contract that makes hallucinated courses structurally impossible, evals as milestone gates, and two bugs worth reading about.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="site.css">
+<style>
+  .hero { padding-block: clamp(2.75rem, 6vw, 4rem) clamp(1.5rem, 3vw, 2.5rem); }
+  .hero h1 { font-size: clamp(2rem, 6vw, 3.25rem); font-weight: 700; letter-spacing: -0.035em; line-height: 1.02; }
+  .hero .lede { max-width: var(--prose); margin-top: 1.25rem; color: var(--muted); }
+  .hero .lede em { color: var(--ink); font-style: normal; font-weight: 600; }
+
+  /* constraints strip */
+  .constraints { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+  .constraints div { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 1.15rem 1.2rem; min-width: 0; }
+  .constraints h3 { font-size: 0.9375rem; margin-top: 0.5rem; }
+  .constraints p { color: var(--muted); font-size: 0.875rem; margin-top: 0.35rem; }
+
+  /* two-column body with a sticky side note */
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 20rem); gap: 2.5rem; align-items: start; }
+  @media (max-width: 900px) { .split { grid-template-columns: minmax(0, 1fr); } }
+
+  .aside { border-top: 2px solid var(--ink); padding-top: 0.85rem; font-size: 0.875rem; }
+  .aside h4 { font-family: var(--font-display); font-size: 0.875rem; margin-bottom: 0.5rem; }
+  .aside p { color: var(--muted); }
+  .aside dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.3rem 1rem; }
+  .aside dt { color: var(--muted); font-family: var(--font-mono); font-size: 0.75rem; }
+  .aside dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 0.8125rem; }
+
+  /* pipeline */
+  .pipeline { display: grid; border: 1px solid var(--line); background: var(--surface); margin-top: 1.75rem; }
+  .step { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); gap: 0.85rem; padding: 0.9rem 1.1rem; border-bottom: 1px solid var(--line); }
+  .step:last-child { border-bottom: 0; }
+  .step .n { color: var(--accent); }
+  .step b { font-family: var(--font-display); font-size: 0.9375rem; font-weight: 600; }
+  .step span { display: block; color: var(--muted); font-size: 0.875rem; margin-top: 0.2rem; }
+  .step.hard { background: transparent; }
+  .step.hard b { color: var(--green); }
+
+  /* data table */
+  .tablewrap { overflow-x: auto; margin-top: 1.5rem; border: 1px solid var(--line); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.875rem; min-width: 30rem; }
+  th, td { text-align: left; padding: 0.65rem 1rem; border-bottom: 1px solid var(--line); }
+  thead th { font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.n { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.bad { color: var(--accent); }
+
+  /* finding callout */
+  .finding { border-top: 2px solid var(--accent); background: var(--surface); padding: 1.25rem 1.35rem; margin-top: 1.75rem; }
+  .finding h4 { font-family: var(--font-display); font-size: 1rem; margin: 0.5rem 0 0.6rem; }
+  .finding p { color: var(--muted); font-size: 0.9375rem; }
+  .finding p + p { margin-top: 0.75rem; }
+  .finding strong { color: var(--ink); font-weight: 600; }
+
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); margin-top: 1.75rem; }
+  .metrics div { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 0.95rem 1.1rem; min-width: 0; }
+  .metrics b { display: block; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 1.4rem; font-weight: 500; letter-spacing: -0.03em; }
+  .metrics span { display: block; margin-top: 0.25rem; }
+
+  .stack { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 1.75rem; }
+  .stack h4 { font-family: var(--font-display); font-size: 0.875rem; margin-bottom: 0.6rem; }
+  .stack ul { margin: 0; padding: 0; list-style: none; font-size: 0.9375rem; color: var(--muted); }
+  .stack li { padding-block: 0.22rem; }
+
+  pre.tree { margin: 1.5rem 0 0; padding: 1.1rem 1.2rem; border: 1px solid var(--line); background: var(--surface); overflow-x: auto; font-family: var(--font-mono); font-size: 0.8125rem; line-height: 1.7; color: var(--muted); }
+  pre.tree b { color: var(--ink); font-weight: 500; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="wordmark" href="index.html">Marker <span>Golf</span></a>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="engineering.html" aria-current="page">Engineering</a>
+      <a href="https://github.com/realGavin/marker">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <div class="wrap hero">
+    <p class="label" style="margin-bottom:1rem">Case study</p>
+    <h1>Three constraints, and what<br>they forced</h1>
+    <p class="lede">
+      Marker is a consumer iOS app with a live LLM feature, built solo. The interesting parts are
+      not the screens — they are the three constraints written down before any code, and the
+      architecture that fell out of taking them literally. <em>No metered APIs. AI cost near zero
+      per user. Nothing the model says is trusted.</em>
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="constraints">
+      <div>
+        <span class="label">Constraint 01</span>
+        <h3>Flat infrastructure cost</h3>
+        <p>No metered map, places or geocoding API, ever. The basemap is one static file; pins ship
+          with the app and cluster on the device.</p>
+      </div>
+      <div>
+        <span class="label">Constraint 02</span>
+        <h3>AI cost near zero per user</h3>
+        <p>Descriptions and embeddings are one-time batch jobs. One live model call exists, it is
+          subscriber-gated, and its worst case is bounded by a fair-use cap.</p>
+      </div>
+      <div>
+        <span class="label">Constraint 03</span>
+        <h3>Grounding, not trust</h3>
+        <p>The model may choose among rows we retrieved. It may not supply facts. The server
+          discards anything it did not itself hand over.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="sec-head">
+      <h2>The grounding contract</h2>
+      <span class="label">supabase/functions/plan-trip</span>
+    </div>
+    <div class="split">
+      <div>
+        <div class="prose">
+          <p>The trip planner takes a free-text brief — "5 days in Scottsdale in March, 4 rounds,
+            mid budget, prefer walkable" — and returns a day-by-day itinerary. The failure everyone
+            expects from that feature is a confidently described golf course that does not exist.</p>
+          <p>It is prevented structurally rather than by prompting. Retrieval happens
+            <strong>before</strong> the model is called and validation happens
+            <strong>after</strong>, so the model's only power is to choose and to explain.</p>
+        </div>
+        <div class="pipeline">
+          <div class="step"><span class="label n">01</span><div><b>Parse</b><span>Free text to structured constraints. One cheap call, strict JSON schema.</span></div></div>
+          <div class="step"><span class="label n">02</span><div><b>Retrieve</b><span>Our code, not the model: PostGIS + pgvector pull 15–40 real candidates.</span></div></div>
+          <div class="step"><span class="label n">03</span><div><b>Compose</b><span>The model sees only those candidates and answers in IDs.</span></div></div>
+          <div class="step hard"><span class="label n">04</span><div><b>Validate</b><span>Unknown IDs dropped. Every number checked against the row it describes. Price language stripped unless a green-fee band is stored. Hop distances recomputed in code.</span></div></div>
+          <div class="step"><span class="label n">05</span><div><b>Render</b><span>The client draws from database rows, never from model prose.</span></div></div>
+        </div>
+        <div class="prose" style="margin-top:1.75rem">
+          <p>The same contract applies on <strong>every turn</strong>, not just the first. Multi-turn
+            is where this normally rots, because the model starts treating its own earlier output as
+            ground truth. So the candidate block is rebuilt from the database each turn rather than
+            from the previous turn's text, the prior itinerary goes back explicitly labelled as the
+            model's own output and not as a source of facts, and the model returns a complete
+            itinerary every time — never a diff, which would invite it to reference something it
+            never saw.</p>
+          <p>When a trip is impossible the planner declines rather than inventing a way to satisfy
+            it. Ask for Wisconsin in January and it says so, and offers the playable window. That
+            window is computed in code from the candidates' stored season data — never the model's
+            opinion, because a fluent, plausible, unsourced month range is exactly the class of
+            claim the whole design exists to refuse.</p>
+        </div>
+      </div>
+      <aside class="aside">
+        <h4>What validation rejects</h4>
+        <p>Measured against the deployed function, not a mock:</p>
+        <dl>
+          <dt>Non-database courses</dt><dd>0</dd>
+          <dt>Price claims</dt><dd>0</dd>
+          <dt>Prompts passing</dt><dd>48/48</dd>
+          <dt>Refinement turns</dt><dd>11/11</dd>
+          <dt>p95 latency</dt><dd>11.5 s</dd>
+        </dl>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="sec-head">
+      <h2>Two bugs worth reading</h2>
+      <span class="label">What the evals caught</span>
+    </div>
+    <div class="prose">
+      <p>Evals are the gate between milestones, and their value showed up in two places where
+        everything looked fine and wasn't.</p>
+    </div>
+
+    <div class="finding">
+      <span class="label">Finding 01 · region resolution</span>
+      <h4>Every grounding check passed on a plan for the wrong city</h4>
+      <p>Region resolution averaged latitude and longitude over <strong>every</strong> city matching
+        a wildcard. The mean of several real places is a place where none of them are.</p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Asked for</th><th>Planned around</th><th>Off by</th></tr></thead>
+          <tbody>
+            <tr><td>Austin</td><td>Longview, East Texas</td><td class="n bad">368 km</td></tr>
+            <tr><td>Pinehurst</td><td>Tri-Cities, Tennessee</td><td class="n bad">275 km</td></tr>
+            <tr><td>Denver</td><td>eastern Kansas</td><td class="n bad">856 km</td></tr>
+            <tr><td>Portland</td><td>Minnesota</td><td class="n bad">2,141 km</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:1.25rem">The expensive half was the prompts that <strong>passed</strong>.
+        Phoenix planned around Eagar. Monterey around Paso Robles. New York around Ramsey, New
+        Jersey. Every grounding check went green — real IDs, no invented facts — because nothing
+        ever asked whether the courses were near the region requested.</p>
+      <p>The fix was to cluster before averaging: real coordinates, grouped by state, median of the
+        dominant group. The <em>durable</em> fix was a new eval check whose expected centre is an
+        independent constant — where the place actually is on Earth — rather than re-resolving
+        through the system under test. An oracle derived from the thing it tests agrees with it by
+        construction, and would have "expected" Longview and passed the Austin plan.</p>
+    </div>
+
+    <div class="finding">
+      <span class="label">Finding 02 · a fix that wasn't</span>
+      <h4>"The picker alone did not fix that, contrary to what I claimed"</h4>
+      <p>The new geographic check immediately found something the old one had concealed.
+        <strong>"Scotsdale" is not a misspelling.</strong> It is a real village in Jefferson County,
+        Missouri where the directory holds exactly one course — so an exact-match rule sent the
+        traveler <strong>1,988 km</strong> from the 33-course Scottsdale, Arizona they meant. The
+        previous lexical check stayed silent because the scheduled course's city string matched the
+        typed region exactly.</p>
+      <p>Rather than invent a typo-distance heuristic with no measured data behind it, the answer
+        was to stop making anyone type a city name blind: the region field became a picker over the
+        offline index. That shipped — and <strong>it did not work.</strong> The picker matched by
+        prefix and substring, and a misspelling is not a substring of the correct spelling, so
+        "Scotsdale" still offered only the Missouri village. Running it on the simulator is what
+        showed the difference between the claim and the behaviour.</p>
+      <p>The real fix adds a fuzzy fallback that runs only when the exact pass left room, and only
+        surfaces a candidate more prominent than what was already found — which is what separates
+        the two directions of the pair. The typo surfaces the bigger place; typing "Scottsdale"
+        correctly does not dredge up the obscure one. It stays inside the frame budget by
+        construction: first-letter buckets cut ~7,700 cities to a few hundred, a length window
+        filters again, and the distance loop bails early.</p>
+      <div class="metrics">
+        <div><b>2.4 ms</b><span class="label">Baseline</span></div>
+        <div><b>3.2 ms</b><span class="label">With fuzzy</span></div>
+        <div><b>5.3 ms</b><span class="label">Worst call</span></div>
+        <div><b>16.7 ms</b><span class="label">Frame budget</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="sec-head">
+      <h2>Cost as an architectural constraint</h2>
+      <span class="label">Two moving parts in steady state</span>
+    </div>
+    <div class="split">
+      <div class="prose">
+        <p>"No metered APIs" is a design input, not a preference. It rules out hosted maps,
+          geocoding and places search at the start, which forces every one of them to be solved
+          with something static.</p>
+        <p>The basemap is a single PMTiles file on object storage. Course pins ship inside the app
+          bundle and are clustered and filtered on the device — the same technique the demo on the
+          overview page uses to draw 12,640 courses in a browser with no tile server. Every course
+          photo is a public-domain USGS aerial, fetched once by the pipeline and served flat-cost
+          with immutable caching.</p>
+        <p>The same logic bounds the AI. Descriptions and embeddings are offline batch jobs that run
+          on a laptop, so they cost nothing per user and nothing per session. The one live call is
+          subscriber-gated, and the turn is claimed <strong>before</strong> the model runs rather
+          than after — so the counter bounds spend rather than counting successes. That ordering
+          matters: generate-then-increment lets fifty concurrent refinements all read the same
+          count, all call the model, and all but one fail, which is fifty billable calls for one
+          tick of the meter.</p>
+        <p>Steady-state operational surface: a Postgres database and one static file host.</p>
+      </div>
+      <aside class="aside">
+        <h4>Worst case per subscriber</h4>
+        <dl>
+          <dt>Plans / month</dt><dd>~20</dd>
+          <dt>AI cost</dt><dd>&lt; $0.25</dd>
+          <dt>Subscription</dt><dd>$5.99</dd>
+          <dt>Basemap</dt><dd>~$1 / mo flat</dd>
+        </dl>
+        <p style="margin-top:0.85rem">The fair-use cap is what makes the margin a fact rather than a
+          hope.</p>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="sec-head">
+      <h2>Isolation and data honesty</h2>
+    </div>
+    <div class="split">
+      <div class="prose">
+        <p>Every user table has row-level security, and the policies live in the migration beside
+          the table they protect rather than in a separate security pass. SQL isolation tests assert
+          that one account cannot read another's rows. Entitlements are writable only by the
+          server-side billing webhook — never by the app — so a compromised client cannot grant
+          itself a subscription.</p>
+        <p>A separate rule governs what the product is allowed to <em>say</em>. Displayed facts come
+          only from explicit source tags. Signals that were derived rather than sourced — hole counts
+          estimated from mapped geometry, public or private inferred from a name pattern — are
+          allowed to drive map filter chips, where being approximately right is useful, and are
+          forbidden from appearing as facts on a course page, where being approximately right is a
+          lie. The data pipeline matched a hand-labelled ground-truth set 50 out of 50.</p>
+      </div>
+      <aside class="aside">
+        <h4>Verified against production</h4>
+        <dl>
+          <dt>Migrations</dt><dd>17</dd>
+          <dt>Community e2e</dt><dd>23/23</dd>
+          <dt>Ground truth</dt><dd>50/50</dd>
+          <dt>States covered</dt><dd>51</dd>
+        </dl>
+        <p style="margin-top:0.85rem">The community suite runs against production with two real
+          accounts, because isolation that is only tested against mocks is not tested.</p>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="sec-head">
+      <h2>One engine, many niches</h2>
+      <span class="label">Lint-enforced</span>
+    </div>
+    <div class="prose">
+      <p>Golf is skin #1 of a domain-agnostic engine. The engine owns reusable behaviour — maps,
+        discovery, lists, profiles, planning — and is <strong>forbidden from containing golf
+        vocabulary</strong>. The skin supplies vocabulary, theme, attribute schema and curated
+        seeds. Database naming is generic too: places, place_logs, lists, never course or round.</p>
+      <p>This is the kind of rule that quietly rots, so it is not a convention — it is a lint that
+        runs in the standard verify step and fails the build. Adding ski resorts or surf breaks
+        means a new skin package and an ETL adapter, not a fork.</p>
+    </div>
+    <pre class="tree"><b>apps/mobile</b>          the engine app (Expo) — no niche vocabulary, lint-enforced
+<b>packages/core</b>        skin contract + domain types
+<b>packages/skins/golf</b>  vocabulary, theme, attribute schema, curated lists
+<b>tooling/etl</b>          extract → transform → enrich → load
+<b>tooling/eval</b>         end-to-end grounding + community evals
+<b>supabase/</b>            17 migrations, RLS isolation tests, edge functions
+<b>infra/tile-worker</b>    edge-cached tile / photo / privacy worker
+<b>docs/</b>                architecture, decision records, data-quality reports</pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="sec-head">
+      <h2>Stack</h2>
+    </div>
+    <div class="stack">
+      <div>
+        <h4>App</h4>
+        <ul><li>Expo / React Native</li><li>TypeScript (strict)</li><li>expo-router</li><li>MapLibre + PMTiles</li></ul>
+      </div>
+      <div>
+        <h4>Backend</h4>
+        <ul><li>Supabase Postgres</li><li>PostGIS + pgvector</li><li>Edge Functions (Deno)</li><li>Cloudflare Workers + R2</li></ul>
+      </div>
+      <div>
+        <h4>AI</h4>
+        <ul><li>Claude Haiku (planner)</li><li>Batch API (descriptions)</li><li>Local embeddings</li><li>zod at every boundary</li></ul>
+      </div>
+      <div>
+        <h4>Data</h4>
+        <ul><li>OpenStreetMap + Overture</li><li>Wikidata enrichment</li><li>USGS NAIP aerials</li><li>Elevation, wind, season</li></ul>
+      </div>
+    </div>
+    <div class="prose" style="margin-top:2rem">
+      <p>I wrote the architecture plan and the decision records first, then directed a team of
+        Claude sub-agents — mobile, backend, data, AI, release and a reviewer — against them, using
+        security reviews and evals as the gates between milestones. The commit history is written to
+        be read: messages explain why a change was made, including the cases where an earlier fix
+        turned out not to work.</p>
+      <p><a href="https://github.com/realGavin/marker">Read the source →</a></p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="attrib">
+      Course data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors
+      (ODbL) and the <a href="https://overturemaps.org/">Overture Maps Foundation</a>. Aerial imagery
+      from USGS NAIP (public domain). Additional facts from
+      <a href="https://www.wikidata.org/">Wikidata</a> (CC0).
+    </p>
+    <p><span class="label">Gavin Zeng</span> &nbsp;·&nbsp; <a href="https://github.com/realGavin/marker">github.com/realGavin/marker</a></p>
+  </div>
+</footer>
+
+</body>
+</html>

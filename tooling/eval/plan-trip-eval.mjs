@@ -352,6 +352,21 @@ const REGION_FIXTURES = {
   // outrank an exact match on a tiny one is a live product question, recorded and
   // deliberately NOT answered here.
   //
+  // It has since been answered: docs/decisions/0002-region-near-miss.md.
+  // resolveRegion KEEPS exact-match precedence — no typo-distance heuristic was
+  // added — and the ambiguity is resolved before the request instead, by the
+  // region picker and its typo-tolerant suggestions (6adc654, 7671249): typing
+  // "Scotsdale" in the app now offers Scotsdale MO, Scottsdale AZ and Scarsdale
+  // NY, and the traveler picks.
+  //
+  // So THIS FIXTURE IS STILL CORRECT AND STILL LOAD-BEARING. The eval posts
+  // region strings straight to the edge function and never goes through the
+  // picker, so resolveRegion("Scotsdale") still resolves to Missouri, which is
+  // the behaviour these coordinates pin. The client fix did not change the
+  // server, and free text reaching resolveRegion is still exact-match-wins by
+  // design (see the decision's Consequences). If that ever changes, this fixture
+  // must change with it, and the failure in between is the point.
+  //
   // HONEST LIMIT ON THIS ONE FIXTURE: `derived` marks it as taken from our own
   // data (the location of that single course) rather than from an independent
   // source, because a village this small is not something to state coordinates
