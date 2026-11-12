@@ -684,9 +684,19 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     drawBasemap(t);
-    // Circles read lighter than squares of the same half-width (pi r^2 vs 4 r^2),
-    // so the radius is bumped to keep the country at the same visual weight.
-    var r = W > 620 ? 1.7 : 1.25;
+    /* Dot size is a fraction of the drawn map, not a fixed pixel count.
+       A fixed radius looks right at one window width and wrong at every
+       other: the map scales with the canvas and the dots did not, so the
+       same code gave a ratio of 0.0017 on a wide window and 0.0039 on a
+       narrow one, where the country turned to mush.
+
+       Measured off the app's share card: dots of radius ~1.1px on a 382px
+       map, a ratio of ~0.0026. This sits below that deliberately — the card
+       carries a handful of played courses, and 12,640 of them need to be
+       finer to stay separate. Clamped so they survive a phone and never
+       coarsen past where they used to be on a desktop.
+       LAYOUT_W is 1, so view.sc is the drawn width of the lower 48. */
+    var r = Math.max(0.6, Math.min(1.7, view.sc * 0.0019));
 
     // Every pass batches its dots into one path and fills once: 12,640
     // separate fill() calls would cost far more than the arcs themselves.
