@@ -5,7 +5,7 @@
 <title>Marker Engineering</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description" content="How Marker was built: a grounding contract that makes hallucinated courses structurally impossible, evals as milestone gates, and two bugs worth reading about.">
+<meta name="description" content="How Marker was built: a grounding contract that makes hallucinated courses structurally impossible, evals as milestone gates, and two findings the eval suite caught during development.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
@@ -58,6 +58,7 @@
   .finding p { color: var(--muted); font-size: 0.9375rem; }
   .finding p + p { margin-top: 0.75rem; }
   .finding strong { color: var(--ink); font-weight: 600; }
+  .fixed { color: var(--green); }
 
   .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); margin-top: 1.75rem; }
   .metrics div { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 0.95rem 1.1rem; min-width: 0; }
@@ -182,16 +183,19 @@
 <section>
   <div class="wrap sec">
     <div class="sec-head">
-      <h2>Two bugs worth reading</h2>
-      <span class="label">What the evals caught</span>
+      <h2>What the evals caught</h2>
+      <span class="label">Two findings from development · both fixed</span>
     </div>
     <div class="prose">
-      <p>Evals are the gate between milestones, and their value showed up in two places where
-        everything looked fine and wasn't.</p>
+      <p><strong>Neither of these ever reached a user.</strong> Both were caught during
+        development by the eval suite that gates each milestone, and both were fixed before the
+        build moved on. They are written up here because the defects are not the point &mdash;
+        <strong>what caught them is.</strong> A test suite is only worth anything once it finds
+        something its author did not already know, and these are the two times this one did.</p>
     </div>
 
     <div class="finding">
-      <span class="label">Finding 01 · region resolution</span>
+      <span class="label">Finding 01 · region resolution · <span class="fixed">fixed</span></span>
       <h4>Every grounding check passed on a plan for the wrong city</h4>
       <p>Region resolution averaged latitude and longitude over <strong>every</strong> city matching
         a wildcard. The mean of several real places is a place where none of them are.</p>
@@ -218,7 +222,7 @@
     </div>
 
     <div class="finding">
-      <span class="label">Finding 02 · a fix that wasn't</span>
+      <span class="label">Finding 02 · a fix that wasn't · <span class="fixed">fixed</span></span>
       <h4>"The picker alone did not fix that, contrary to what I claimed"</h4>
       <p>The new geographic check immediately found something the old one had concealed.
         <strong>"Scotsdale" is not a misspelling.</strong> It is a real village in Jefferson County,
