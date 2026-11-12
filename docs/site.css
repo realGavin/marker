@@ -1,0 +1,221 @@
+/* Marker project site — shared tokens and base.
+   Layout concept: a survey sheet. Hairline rules, a left-aligned measure,
+   mono figures in labelled fields, screenshots set as numbered plates.
+   Palette is taken from the app's own store screenshots (paper ground,
+   near-black ink, the brass rule under each caption) rather than invented. */
+
+:root {
+  /* colour — light (paper) */
+  --bg: #f4f3f0;
+  --surface: #fbfaf8;
+  --ink: #191c1a;
+  --muted: #5f6562;
+  --line: #d8d5cd;
+  --line-strong: #bdb9ae;
+  --accent: #8a6a1f;        /* brass, as on the screenshot captions */
+  --accent-bright: #a98127;
+  --green: #2f5d3f;         /* fairway, for secondary data marks */
+  --ghost: rgba(25, 28, 26, 0.13);
+
+  /* type */
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* measure */
+  --measure: 70rem;
+  --prose: 38rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111312;
+    --surface: #181b19;
+    --ink: #e7e9e5;
+    --muted: #9ba29d;
+    --line: #272b28;
+    --line-strong: #3a403c;
+    --accent: #d8b05c;
+    --accent-bright: #e8c577;
+    --green: #7fb08c;
+    --ghost: rgba(231, 233, 229, 0.12);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #111312;
+  --surface: #181b19;
+  --ink: #e7e9e5;
+  --muted: #9ba29d;
+  --line: #272b28;
+  --line-strong: #3a403c;
+  --accent: #d8b05c;
+  --accent-bright: #e8c577;
+  --green: #7fb08c;
+  --ghost: rgba(231, 233, 229, 0.12);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: var(--measure);
+  margin-inline: auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  margin: 0;
+}
+
+p { margin: 0; }
+a { color: inherit; }
+
+/* a labelled field, as on a survey form */
+.label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ---------- masthead ---------- */
+
+.masthead {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 20;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto;
+  height: env(safe-area-inset-top, 0px);
+  background: var(--bg);
+  z-index: 21;
+}
+.masthead .wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 0.75rem;
+}
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.0625rem;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+.wordmark span {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.masthead nav {
+  display: flex;
+  gap: 1.25rem;
+  font-family: var(--font-display);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.masthead nav a { color: var(--muted); text-decoration: none; }
+.masthead nav a:hover,
+.masthead nav a[aria-current="page"] { color: var(--ink); }
+
+/* ---------- sections ---------- */
+
+section { border-top: 1px solid var(--line); }
+section:first-of-type { border-top: 0; }
+.sec { padding-block: clamp(2.75rem, 6vw, 4.5rem); }
+
+.sec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+.sec-head h2 { font-size: clamp(1.35rem, 2.6vw, 1.75rem); }
+.sec-head .label { margin-left: auto; white-space: nowrap; }
+
+/* Below this the heading wraps to three lines with the label jammed beside it,
+   so the label drops under instead. */
+@media (max-width: 640px) {
+  .sec-head { flex-direction: column; align-items: flex-start; gap: 0.4rem; }
+  .sec-head .label { margin-left: 0; white-space: normal; }
+}
+
+.prose { max-width: var(--prose); }
+.prose p + p { margin-top: 1rem; }
+.prose strong { font-weight: 600; }
+
+/* ---------- buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-display);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 0.6rem 1.05rem;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+  transition: opacity 0.15s ease;
+}
+.btn:hover { opacity: 0.82; }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--line-strong); }
+.btn.ghost:hover { border-color: var(--ink); opacity: 1; }
+
+a:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+}
+
+/* ---------- footer ---------- */
+
+footer {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+footer .wrap { padding-block: 2.5rem; display: grid; gap: 1.25rem; }
+footer a { color: var(--muted); }
+footer .attrib { max-width: var(--prose); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

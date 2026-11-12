@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Marker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="A Letterboxd for golf courses: 12,640 US courses on one map, a play log, bucket lists, and an AI trip planner that cannot invent a course.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="site.css">
+<style>
+  /* ---------- hero ---------- */
+  .hero { padding-block: clamp(3rem, 7vw, 5rem) clamp(2rem, 4vw, 3rem); }
+  .hero .eyebrow { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; margin-bottom: 1.5rem; }
+  .hero h1 {
+    font-size: clamp(2.75rem, 9vw, 5rem);
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: 0.95;
+  }
+  .hero .tag {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: clamp(1.0625rem, 2.6vw, 1.375rem);
+    margin-top: 1rem;
+    color: var(--ink);
+  }
+  .hero .lede { max-width: var(--prose); margin-top: 1.25rem; color: var(--muted); }
+  .hero .lede em { color: var(--ink); font-style: normal; font-weight: 600; }
+  .cta { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2rem; }
+
+  /* ---------- spec strip ---------- */
+  .spec {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    border-top: 1px solid var(--line);
+    border-left: 1px solid var(--line);
+  }
+  .spec div {
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 1rem 1.1rem;
+    min-width: 0;
+  }
+  .spec b {
+    display: block;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(1.25rem, 3vw, 1.6rem);
+    font-weight: 500;
+    letter-spacing: -0.03em;
+  }
+  .spec span { display: block; margin-top: 0.3rem; }
+
+  /* ---------- live map demo ---------- */
+  .demo-grid { display: grid; grid-template-columns: minmax(0, 1fr) 16rem; gap: 2rem; align-items: start; }
+  @media (max-width: 860px) { .demo-grid { grid-template-columns: minmax(0, 1fr); } }
+
+  .plot {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    aspect-ratio: 5 / 3;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .plot canvas { display: block; width: 100%; height: 100%; }
+  .readout {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    padding: 0.6rem 0.85rem;
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .readout .name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .readout .coord { color: var(--muted); white-space: nowrap; }
+
+  .controls { display: grid; gap: 1.5rem; }
+  .count b {
+    display: block;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 2.25rem;
+    font-weight: 500;
+    letter-spacing: -0.04em;
+    line-height: 1;
+  }
+  .count span { display: block; margin-top: 0.4rem; }
+  .chipset { display: grid; gap: 0.5rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+  .chip {
+    font-family: var(--font-display);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.3rem 0.65rem;
+    border: 1px solid var(--line-strong);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+  .chip:hover { color: var(--ink); border-color: var(--ink); }
+  .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+  .reset {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    text-align: left;
+  }
+  .reset[hidden] { display: none; }
+  .demo-note { max-width: var(--prose); margin-top: 2rem; color: var(--muted); font-size: 0.9375rem; }
+
+  /* ---------- plates ---------- */
+  .plates {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    gap: 1.25rem;
+  }
+  figure { margin: 0; min-width: 0; }
+  figure img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--line);
+    background: #f2f1ef;
+  }
+  figcaption { display: flex; gap: 0.6rem; margin-top: 0.6rem; align-items: baseline; }
+  figcaption .n { color: var(--accent); }
+
+  /* ---------- feature list ---------- */
+  .features { display: grid; gap: 0; border-top: 1px solid var(--line); }
+  .feature {
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 15rem) minmax(0, 1fr);
+    gap: 1.5rem;
+    padding-block: 1.5rem;
+    border-bottom: 1px solid var(--line);
+    align-items: start;
+  }
+  @media (max-width: 720px) {
+    .feature { grid-template-columns: 2.5rem minmax(0, 1fr); }
+    .feature p { grid-column: 2; }
+  }
+  .feature h3 { font-size: 1.0625rem; }
+  .feature p { color: var(--muted); font-size: 0.9375rem; }
+  .feature .n { color: var(--accent); }
+
+  /* ---------- engineering teaser ---------- */
+  .teaser { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2.5rem; align-items: start; }
+  @media (max-width: 800px) { .teaser { grid-template-columns: minmax(0, 1fr); } }
+  .pipeline { display: grid; gap: 0; border: 1px solid var(--line); background: var(--surface); }
+  .step { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); gap: 0.85rem; padding: 0.85rem 1rem; border-bottom: 1px solid var(--line); }
+  .step:last-child { border-bottom: 0; }
+  .step .n { color: var(--accent); }
+  .step b { font-family: var(--font-display); font-size: 0.9375rem; font-weight: 600; }
+  .step span { display: block; color: var(--muted); font-size: 0.875rem; margin-top: 0.15rem; }
+  .step.hard b { color: var(--green); }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="wordmark" href="index.html">Marker <span>Golf</span></a>
+    <nav>
+      <a href="index.html" aria-current="page">Overview</a>
+      <a href="engineering.html">Engineering</a>
+      <a href="https://github.com/realGavin/marker">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <div class="wrap hero">
+    <div class="eyebrow">
+      <span class="label">iOS · Expo</span>
+      <span class="label">Supabase · PostGIS</span>
+      <span class="label">Claude Haiku</span>
+      <span class="label">Solo build</span>
+    </div>
+    <h1>Marker</h1>
+    <p class="tag">A Letterboxd for golf courses.</p>
+    <p class="lede">
+      Every golf course in the United States on one map — <em>12,640</em> of them. Log the ones
+      you've played, rate them, chase bucket lists, and plan a trip with an AI planner that is
+      structurally incapable of inventing a course that doesn't exist.
+    </p>
+    <div class="cta">
+      <a class="btn" href="engineering.html">How it's built</a>
+      <a class="btn ghost" href="https://github.com/realGavin/marker">Source on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="spec">
+      <div><b>12,640</b><span class="label">Courses</span></div>
+      <div><b>51</b><span class="label">States + DC</span></div>
+      <div><b>50/50</b><span class="label">Ground truth matched</span></div>
+      <div><b>48/48</b><span class="label">Planner eval</span></div>
+      <div><b>0</b><span class="label">Metered map APIs</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="sec-head">
+      <h2>The whole country, filtered live</h2>
+      <span class="label">Real data · 12,640 points</span>
+    </div>
+    <div class="demo-grid">
+      <div>
+        <div class="plot">
+          <canvas id="map" role="img"
+            aria-label="Scatter plot of 12,640 US golf courses, which traces the outline of the United States."></canvas>
+          <div class="readout">
+            <span class="name" id="ro-name">Hover a course</span>
+            <span class="coord" id="ro-coord"></span>
+          </div>
+        </div>
+      </div>
+      <div class="controls">
+        <div class="count">
+          <b id="count">12,640</b>
+          <span class="label">Courses shown</span>
+        </div>
+        <div class="chipset">
+          <span class="label">Holes</span>
+          <div class="chips" id="g-holes"></div>
+        </div>
+        <div class="chipset">
+          <span class="label">Access</span>
+          <div class="chips" id="g-access"></div>
+        </div>
+        <div class="chipset">
+          <span class="label">Setting</span>
+          <div class="chips" id="g-setting"></div>
+        </div>
+        <button class="reset" id="reset" hidden>Clear filters</button>
+      </div>
+    </div>
+    <p class="demo-note">
+      No basemap, no tile server, no geocoding call. Every dot is a real course from the same
+      dataset the app bundles, projected and filtered in the browser — which is exactly how the
+      phone does it. The country draws itself out of the courses.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="sec-head">
+      <h2>In the app</h2>
+      <span class="label">iPhone · 6.9&Prime;</span>
+    </div>
+    <div class="plates">
+      <figure><img src="store-screenshots/final/01-map.png" width="1290" height="2796" loading="lazy"
+        alt="Map screen showing clustered course pins across California with filter controls.">
+        <figcaption><span class="label n">01</span><span class="label">Map</span></figcaption></figure>
+      <figure><img src="store-screenshots/final/02-preview.png" width="1290" height="2796" loading="lazy"
+        alt="A course preview card opened from a map pin, with the option to log a round.">
+        <figcaption><span class="label n">02</span><span class="label">Preview</span></figcaption></figure>
+      <figure><img src="store-screenshots/final/03-course.png" width="1290" height="2796" loading="lazy"
+        alt="A full course page with an aerial photo, facts and a rating control.">
+        <figcaption><span class="label n">03</span><span class="label">Course</span></figcaption></figure>
+      <figure><img src="store-screenshots/final/04-profile.png" width="1290" height="2796" loading="lazy"
+        alt="Profile screen showing a personal map of played courses and a collector rank.">
+        <figcaption><span class="label n">04</span><span class="label">Profile</span></figcaption></figure>
+      <figure><img src="store-screenshots/final/05-itinerary.png" width="1290" height="2796" loading="lazy"
+        alt="A generated day-by-day trip itinerary built from real courses.">
+        <figcaption><span class="label n">05</span><span class="label">Itinerary</span></figcaption></figure>
+      <figure><img src="store-screenshots/final/06-lists.png" width="1290" height="2796" loading="lazy"
+        alt="Curated bucket lists of notable courses.">
+        <figcaption><span class="label n">06</span><span class="label">Lists</span></figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="sec-head">
+      <h2>What it does</h2>
+    </div>
+    <div class="features">
+      <div class="feature">
+        <span class="label n">01</span>
+        <h3>Every course, one map</h3>
+        <p>12,640 US courses with an aerial photo of nearly every one. Filter by holes, access and
+          distance; search by course or by town. Pins ship with the app and cluster on the device,
+          so the map works with no network.</p>
+      </div>
+      <div class="feature">
+        <span class="label n">02</span>
+        <h3>A log worth keeping</h3>
+        <p>Mark courses played or want-to-play in a tap, rate out of 10, keep private notes. Your
+          played courses become a map you can share, with a collector rank attached.</p>
+      </div>
+      <div class="feature">
+        <span class="label n">03</span>
+        <h3>Bucket lists</h3>
+        <p>Curated lists — iconic American publics, major venues — plus your own. Progress is
+          tracked against the same log, so nothing is entered twice.</p>
+      </div>
+      <div class="feature">
+        <span class="label n">04</span>
+        <h3>Trips, planned with friends</h3>
+        <p>Day-by-day itineraries built only from courses that exist in the directory. Invite
+          friends with a code; everyone sees and edits the same plan, with tee-time reminders
+          24 hours and 4 hours out.</p>
+      </div>
+      <div class="feature">
+        <span class="label n">05</span>
+        <h3>A planner that declines</h3>
+        <p>Ask for Wisconsin in January and it says no, and tells you the courses there usually
+          play April to October. The refusal is computed from stored season data, not from the
+          model's opinion.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="sec-head">
+      <h2>Why the planner can't lie</h2>
+      <span class="label">Retrieve first, validate after</span>
+    </div>
+    <div class="teaser">
+      <div class="prose">
+        <p>The trip planner is the only live AI call in the product, and the whole design exists to
+          make one failure impossible: a course that doesn't exist, or a fact that was never
+          measured, appearing in a plan.</p>
+        <p>The model never supplies facts. Our code retrieves real rows from the database first;
+          the model may only <strong>choose among them by ID</strong>; the server then discards any
+          ID it did not itself supply. The client renders from validated IDs, never from the
+          model's prose — so a fabricated course has nowhere to appear.</p>
+        <p>An end-to-end eval runs the whole thing against the deployed function on every change,
+          and it is what caught the bugs worth reading about.</p>
+        <p><a href="engineering.html">Read the engineering case study →</a></p>
+      </div>
+      <div class="pipeline">
+        <div class="step"><span class="label n">01</span><div><b>Parse</b><span>Free text to structured constraints, strict JSON schema.</span></div></div>
+        <div class="step"><span class="label n">02</span><div><b>Retrieve</b><span>Our code runs PostGIS + pgvector. 15–40 real candidates.</span></div></div>
+        <div class="step"><span class="label n">03</span><div><b>Compose</b><span>Model sees only those candidates, answers in IDs.</span></div></div>
+        <div class="step hard"><span class="label n">04</span><div><b>Validate</b><span>Unknown IDs dropped. Untraceable numbers rejected. Region checked.</span></div></div>
+        <div class="step"><span class="label n">05</span><div><b>Render</b><span>Client draws from database rows, never from prose.</span></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="attrib">
+      Course data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors
+      (ODbL) and the <a href="https://overturemaps.org/">Overture Maps Foundation</a>. Aerial imagery
+      from USGS NAIP (public domain). Additional facts from
+      <a href="https://www.wikidata.org/">Wikidata</a> (CC0).
+    </p>
+    <p><span class="label">Gavin Zeng</span> &nbsp;·&nbsp; <a href="https://github.com/realGavin/marker">github.com/realGavin/marker</a></p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var canvas = document.getElementById("map");
+  var ctx = canvas.getContext("2d");
+  var countEl = document.getElementById("count");
+  var roName = document.getElementById("ro-name");
+  var roCoord = document.getElementById("ro-coord");
+  var resetBtn = document.getElementById("reset");
+
+  var GROUPS = [
+    { el: "g-holes",   tags: [["18", "18 holes"], ["9", "9 holes"]] },
+    { el: "g-access",  tags: [["public", "Public"], ["private", "Private"]] },
+    { el: "g-setting", tags: [["coastal", "Coastal"], ["wooded", "Wooded"], ["desert", "Desert"],
+                              ["mountain", "Mountain"], ["hilly", "Hilly"], ["windy", "Windy"]] }
+  ];
+
+  // demo-pins.json is generated from the app's own bundled pin dataset by
+  // scripts/build-demo-pins.mjs — regenerate it whenever the ETL reloads pins,
+  // or this page quietly shows a stale country.
+  var data = null;      // { tags, n, c, s, lat, lng, t }
+  var bit = {};         // tag -> bitmask
+  var active = 0;       // OR within a group, AND across groups -> stored as array of masks
+  var groupMasks = [0, 0, 0];
+  var pts = null;       // Float32Array of x,y in [0,1] plot space
+  var shown = null;     // Uint8Array flags
+  var dpr = 1, W = 0, H = 0;
+
+  /* ---- Albers equal-area conic. The US is three of these: the lower 48 and
+     two insets, which is what makes Alaska and Hawaii readable at all. ---- */
+  function albers(lon0, lat0, p1, p2) {
+    var rad = Math.PI / 180;
+    var s1 = Math.sin(p1 * rad), s2 = Math.sin(p2 * rad);
+    var n = (s1 + s2) / 2;
+    var C = Math.cos(p1 * rad) * Math.cos(p1 * rad) + 2 * n * s1;
+    var r0 = Math.sqrt(C - 2 * n * Math.sin(lat0 * rad)) / n;
+    return function (lon, lat) {
+      var r = Math.sqrt(C - 2 * n * Math.sin(lat * rad)) / n;
+      var th = n * ((lon - lon0) * rad);
+      return [r * Math.sin(th), r0 - r * Math.cos(th)];
+    };
+  }
+
+  /* Layout space: the lower 48 across the full width, with Alaska and Hawaii
+     as insets in the empty Pacific corner — the same arrangement d3's
+     albersUsa uses, for the same reason (at true scale Alaska swamps the map
+     and Hawaii is off the edge). Aspect is preserved twice: each group is
+     fitted into its own rect, then the whole layout is fitted to the canvas. */
+  var LAYOUT_W = 1.0, LAYOUT_H = 0.62;
+  var PROJ = {
+    conus: { fn: albers(-96, 37.5, 29.5, 45.5), rect: [0.000, 0.000, 1.000, 0.605] },
+    AK:    { fn: albers(-152, 60, 55, 65),      rect: [0.005, 0.395, 0.165, 0.565] },
+    HI:    { fn: albers(-157, 20, 8, 18),       rect: [0.195, 0.490, 0.295, 0.565] }
+  };
+  // Inset labels: 22 Alaskan and 80 Hawaiian courses are a sparse scatter, and
+  // unlabelled they read as stray marks rather than as two more states.
+  var INSET_LABELS = [["AK", 0.005], ["HI", 0.195]];
+
+  function project() {
+    var i, n = data.n.length, key, g;
+    var groups = { conus: [], AK: [], HI: [] };
+    for (i = 0; i < n; i++) {
+      key = (data.s[i] === "AK" || data.s[i] === "HI") ? data.s[i] : "conus";
+      groups[key].push(i);
+    }
+    pts = new Float32Array(n * 2);
+    for (key in groups) {
+      g = groups[key];
+      if (!g.length) continue;
+      var p = PROJ[key], xs = new Float64Array(g.length), ys = new Float64Array(g.length);
+      var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (i = 0; i < g.length; i++) {
+        var xy = p.fn(data.lng[g[i]], data.lat[g[i]]);
+        xs[i] = xy[0]; ys[i] = xy[1];
+        if (xy[0] < minX) minX = xy[0];
+        if (xy[0] > maxX) maxX = xy[0];
+        if (xy[1] < minY) minY = xy[1];
+        if (xy[1] > maxY) maxY = xy[1];
+      }
+      var bw = p.rect[2] - p.rect[0], bh = p.rect[3] - p.rect[1];
+      var sw = (maxX - minX) || 1e-9, sh = (maxY - minY) || 1e-9;
+      var sc = Math.min(bw / sw, bh / sh);
+      var ox = p.rect[0] + (bw - sw * sc) / 2, oy = p.rect[1] + (bh - sh * sc) / 2;
+      for (i = 0; i < g.length; i++) {
+        pts[g[i] * 2] = ox + (xs[i] - minX) * sc;
+        // Albers y grows northward and canvas y grows downward, so flip here
+        // rather than anywhere further along, where it would be invisible.
+        pts[g[i] * 2 + 1] = oy + (maxY - ys[i]) * sc;
+      }
+    }
+  }
+
+  function tokens() {
+    var cs = getComputedStyle(document.body);
+    return {
+      ink: cs.getPropertyValue("--ink").trim() || "#191c1a",
+      accent: cs.getPropertyValue("--accent").trim() || "#8a6a1f",
+      muted: cs.getPropertyValue("--muted").trim() || "#5f6562",
+      ghost: cs.getPropertyValue("--ghost").trim() || "rgba(0,0,0,.12)"
+    };
+  }
+
+  function resize() {
+    var rect = canvas.getBoundingClientRect();
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = Math.max(1, Math.round(rect.width));
+    H = Math.max(1, Math.round(rect.height));
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    fitView();
+    draw();
+  }
+
+  var PAD = 12, BOTTOM = 36; // leave room for the readout strip
+  var view = { sc: 1, ox: 0, oy: 0 };
+
+  /* One scale for the whole layout, so the insets keep their size relative to
+     the mainland instead of each stretching to its own box. */
+  function fitView() {
+    var pw = Math.max(1, W - PAD * 2);
+    var ph = Math.max(1, H - PAD - BOTTOM);
+    view.sc = Math.min(pw / LAYOUT_W, ph / LAYOUT_H);
+    view.ox = PAD + (pw - LAYOUT_W * view.sc) / 2;
+    view.oy = PAD + (ph - LAYOUT_H * view.sc) / 2;
+  }
+
+  function plotX(u) { return view.ox + u * view.sc; }
+  function plotY(v) { return view.oy + v * view.sc; }
+
+  function draw() {
+    if (!pts) return;
+    var t = tokens(), i, n = data.n.length;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    var r = W > 620 ? 1.5 : 1.1;
+
+    // Non-matching courses stay as ghosts so the country keeps its shape.
+    ctx.fillStyle = t.ghost;
+    for (i = 0; i < n; i++) {
+      if (shown[i]) continue;
+      ctx.fillRect(plotX(pts[i * 2]) - r, plotY(pts[i * 2 + 1]) - r, r * 2, r * 2);
+    }
+    ctx.fillStyle = anyFilter() ? t.accent : t.ink;
+    for (i = 0; i < n; i++) {
+      if (!shown[i]) continue;
+      ctx.fillRect(plotX(pts[i * 2]) - r, plotY(pts[i * 2 + 1]) - r, r * 2, r * 2);
+    }
+
+    ctx.fillStyle = t.muted;
+    ctx.font = '500 10px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textBaseline = "top";
+    for (i = 0; i < INSET_LABELS.length; i++) {
+      ctx.fillText(INSET_LABELS[i][0], plotX(INSET_LABELS[i][1]), plotY(0.575));
+    }
+  }
+
+  function anyFilter() { return groupMasks[0] || groupMasks[1] || groupMasks[2]; }
+
+  function applyFilters() {
+    var i, n = data.n.length, c = 0, bits;
+    for (i = 0; i < n; i++) {
+      bits = data.t[i];
+      var ok = (!groupMasks[0] || (bits & groupMasks[0])) &&
+               (!groupMasks[1] || (bits & groupMasks[1])) &&
+               (!groupMasks[2] || (bits & groupMasks[2]));
+      shown[i] = ok ? 1 : 0;
+      if (ok) c++;
+    }
+    countEl.textContent = c.toLocaleString("en-US");
+    resetBtn.hidden = !anyFilter();
+    draw();
+  }
+
+  function buildChips() {
+    GROUPS.forEach(function (g, gi) {
+      var host = document.getElementById(g.el);
+      g.tags.forEach(function (pair) {
+        var tag = pair[0], labelText = pair[1];
+        var b = document.createElement("button");
+        b.className = "chip";
+        b.type = "button";
+        b.textContent = labelText;
+        b.setAttribute("aria-pressed", "false");
+        b.addEventListener("click", function () {
+          var on = b.getAttribute("aria-pressed") === "true";
+          b.setAttribute("aria-pressed", on ? "false" : "true");
+          groupMasks[gi] = on ? (groupMasks[gi] & ~bit[tag]) : (groupMasks[gi] | bit[tag]);
+          applyFilters();
+        });
+        host.appendChild(b);
+      });
+    });
+    resetBtn.addEventListener("click", function () {
+      groupMasks = [0, 0, 0];
+      Array.prototype.forEach.call(document.querySelectorAll(".chip"), function (c) {
+        c.setAttribute("aria-pressed", "false");
+      });
+      applyFilters();
+    });
+  }
+
+  /* Nearest shown course to the pointer, within a few pixels. A linear pass
+     over 12,640 points is well under a frame, so no spatial index is needed. */
+  function nearest(px, py) {
+    var best = -1, bestD = 64, i, dx, dy, d, n = data.n.length;
+    for (i = 0; i < n; i++) {
+      if (!shown[i]) continue;
+      dx = plotX(pts[i * 2]) - px;
+      dy = plotY(pts[i * 2 + 1]) - py;
+      d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+  }
+
+  function onMove(ev) {
+    var rect = canvas.getBoundingClientRect();
+    var i = nearest(ev.clientX - rect.left, ev.clientY - rect.top);
+    if (i < 0) {
+      roName.textContent = "Hover a course";
+      roCoord.textContent = "";
+      return;
+    }
+    roName.textContent = data.n[i] + (data.c[i] ? " · " + data.c[i] : "") + ", " + data.s[i];
+    roCoord.textContent = data.lat[i].toFixed(3) + ", " + data.lng[i].toFixed(3);
+  }
+
+  function boot(d) {
+    data = d;
+    d.tags.forEach(function (t, i) { bit[t] = 1 << i; });
+    shown = new Uint8Array(d.n.length).fill(1);
+    project();
+    buildChips();
+    countEl.textContent = d.n.length.toLocaleString("en-US");
+    resize();
+    window.addEventListener("resize", resize);
+    canvas.addEventListener("mousemove", onMove);
+    canvas.addEventListener("mouseleave", function () {
+      roName.textContent = "Hover a course";
+      roCoord.textContent = "";
+    });
+    if (window.matchMedia) {
+      var mq = window.matchMedia("(prefers-color-scheme: dark)");
+      if (mq.addEventListener) mq.addEventListener("change", draw);
+    }
+  }
+
+  fetch("demo-pins.json")
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(boot)
+    .catch(function () {
+      roName.textContent = "Course data unavailable";
+      countEl.textContent = "12,640";
+    });
+})();
+</script>
+
+</body>
+</html>
