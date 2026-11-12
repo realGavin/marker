@@ -60,7 +60,7 @@
 
   .plot {
     position: relative;
-    background: var(--surface);
+    background: var(--map-panel);
     border: 1px solid var(--line);
     aspect-ratio: 5 / 3;
     max-width: 100%;
@@ -558,6 +558,16 @@
     }
   }
 
+  /* #rrggbb -> rgba(), so the glow can be the same brass as the dot it comes
+     off rather than a second colour that has to be kept in sync with it. */
+  function alpha(hex, a) {
+    var h = hex.replace("#", "");
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var v = parseInt(h, 16);
+    if (isNaN(v) || h.length !== 6) return hex;
+    return "rgba(" + ((v >> 16) & 255) + "," + ((v >> 8) & 255) + "," + (v & 255) + "," + a + ")";
+  }
+
   function tokens() {
     var cs = getComputedStyle(document.body);
     return {
@@ -567,7 +577,8 @@
       ghost: cs.getPropertyValue("--ghost").trim() || "rgba(0,0,0,.12)",
       land: cs.getPropertyValue("--map-land").trim() || "#232724",
       border: cs.getPropertyValue("--map-line").trim() || "#3b423c",
-      coast: cs.getPropertyValue("--map-coast").trim() || "#596158"
+      coast: cs.getPropertyValue("--map-coast").trim() || "#596158",
+      dot: cs.getPropertyValue("--map-dot").trim() || "#868d88"
     };
   }
 
@@ -677,25 +688,43 @@
     // so the radius is bumped to keep the country at the same visual weight.
     var r = W > 620 ? 1.7 : 1.25;
 
-    // Both passes batch every dot into one path and fill once: 12,640 separate
-    // fill() calls would cost far more than the arcs themselves. moveTo before
-    // each arc starts a new subpath, otherwise consecutive dots get joined.
-    function dots(want) {
+    // Every pass batches its dots into one path and fills once: 12,640
+    // separate fill() calls would cost far more than the arcs themselves.
+    // moveTo before each arc starts a new subpath, otherwise consecutive dots
+    // get joined into one shape.
+    function dots(want, rad) {
       ctx.beginPath();
       for (i = 0; i < n; i++) {
         if (shown[i] !== want) continue;
         var x = plotX(pts[i * 2]), y = plotY(pts[i * 2 + 1]);
-        ctx.moveTo(x + r, y);
-        ctx.arc(x, y, r, 0, TAU);
+        ctx.moveTo(x + rad, y);
+        ctx.arc(x, y, rad, 0, TAU);
       }
       ctx.fill();
     }
 
-    // Non-matching courses stay as ghosts so the country keeps its shape.
-    ctx.fillStyle = t.ghost;
-    dots(0);
-    ctx.fillStyle = anyFilter() ? t.accent : t.ink;
-    dots(1);
+    if (!anyFilter()) {
+      // Nothing selected: the whole directory, sitting back against the land
+      // rather than competing with it.
+      ctx.fillStyle = t.dot;
+      dots(1, r);
+    } else {
+      // Non-matching courses stay as ghosts so the country keeps its shape.
+      ctx.fillStyle = t.ghost;
+      dots(0, r);
+
+      /* The glow is two wider passes of the same brass underneath the dot,
+         not ctx.shadowBlur, which would re-blur a path of thousands of
+         subpaths on every frame. Two rings give a falloff one cannot, and the
+         alphas stay low because they stack wherever courses cluster — which
+         is the point: a dense coast blooms, a lone course stays a dot. */
+      ctx.fillStyle = alpha(t.accent, 0.09);
+      dots(1, r * 3.4);
+      ctx.fillStyle = alpha(t.accent, 0.16);
+      dots(1, r * 1.9);
+      ctx.fillStyle = t.accent;
+      dots(1, r);
+    }
 
     ctx.fillStyle = t.muted;
     ctx.font = '500 10px "JetBrains Mono", ui-monospace, monospace';

@@ -19,6 +19,10 @@
   --map-land: #e6e2d7;
   --map-line: #c7c1b2;
   --map-coast: #a39b89;
+  /* Course dots sit back so the brass highlight carries the eye, the way the
+     app's share card plays played courses against everything else. */
+  --map-dot: #6c7168;
+  --map-panel: #fbfaf8;
   --accent: #8a6a1f;        /* brass, as on the screenshot captions */
   --accent-bright: #a98127;
   --green: #2f5d3f;         /* fairway, for secondary data marks */
@@ -45,6 +49,8 @@
     --map-land: #232724;
     --map-line: #3b423c;
     --map-coast: #596158;
+    --map-dot: #868d88;
+    --map-panel: #0e100f;
     --accent: #d8b05c;
     --accent-bright: #e8c577;
     --green: #7fb08c;
@@ -63,6 +69,8 @@
   --map-land: #232724;
   --map-line: #3b423c;
   --map-coast: #596158;
+  --map-dot: #868d88;
+  --map-panel: #0e100f;
   --accent: #d8b05c;
   --accent-bright: #e8c577;
   --green: #7fb08c;
